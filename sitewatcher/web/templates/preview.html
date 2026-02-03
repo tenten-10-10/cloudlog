@@ -1,0 +1,47 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="panel">
+    <div class="row-between">
+      <div>
+        <h2 style="margin:0">Preview</h2>
+        <div class="hint">抽出結果が意図通りか確認してください。</div>
+      </div>
+      <a class="btn" href="javascript:history.back()">Back</a>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="row">
+      <div class="pill">Type: <strong>{{ type }}</strong></div>
+      <div class="pill">Render JS: <strong>{{ "ON" if render_js else "OFF" }}</strong></div>
+      <div class="pill">Extract: <strong>{{ extract }}</strong></div>
+      <div class="pill">Timeout: <strong>{{ timeout_seconds }}s</strong></div>
+    </div>
+    <div style="margin-top:10px">
+      <div class="muted">URL</div>
+      <div><a href="{{ url }}" target="_blank" rel="noreferrer">{{ url }}</a></div>
+    </div>
+    {% if selector %}
+      <div style="margin-top:10px">
+        <div class="muted">selector</div>
+        <div><code>{{ selector }}</code></div>
+      </div>
+    {% endif %}
+  </div>
+
+  <div class="panel">
+    {% if result.ok %}
+      <div class="row">
+        <span class="tag ok">OK</span>
+        <span class="muted">signature: <code>{{ result.signature }}</code></span>
+      </div>
+      <pre style="margin-top:12px">{{ result.content }}</pre>
+    {% else %}
+      <div class="row">
+        <span class="tag bad">ERROR</span>
+        <span class="muted">{{ result.error }}</span>
+      </div>
+    {% endif %}
+  </div>
+{% endblock %}
+

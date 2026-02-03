@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title or "SiteWatcher" }}</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <div class="container">
+      <div class="nav">
+        <div class="left">
+          <div class="brand"><a href="/">SiteWatcher</a></div>
+          <a class="pill" href="/targets/new">+ Target</a>
+          <a class="pill" href="/settings">Settings</a>
+        </div>
+        <div class="row">
+          <form method="post" action="/run-now">
+            <button class="btn ok" type="submit">Run now</button>
+          </form>
+        </div>
+      </div>
+
+      {% block content %}{% endblock %}
+    </div>
+
+    <script>
+      document.addEventListener("click", (e) => {
+        const el = e.target.closest("[data-confirm]");
+        if (!el) return;
+        const msg = el.getAttribute("data-confirm") || "Are you sure?";
+        if (!confirm(msg)) e.preventDefault();
+      });
+    </script>
+  </body>
+</html>
+

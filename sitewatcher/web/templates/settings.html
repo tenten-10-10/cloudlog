@@ -1,0 +1,130 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="panel">
+    <div class="row-between">
+      <div>
+        <h2 style="margin:0">Settings</h2>
+        <div class="hint">通知先の有効化とトークン設定、監視間隔を変更します。</div>
+      </div>
+      <a class="btn" href="/">Back</a>
+    </div>
+  </div>
+
+  <div class="panel">
+    <form method="post" action="/settings">
+      <div class="grid2">
+        <div>
+          <label>Interval (seconds)</label>
+          <input type="number" name="interval_seconds" min="10" max="86400" value="{{ interval_seconds }}" />
+          <div class="hint">短すぎるとブロック/負荷の原因になります。</div>
+        </div>
+        <div>
+          <label>Scheduler</label>
+          <div class="checkbox">
+            <input type="checkbox" name="scheduler_enabled" {% if scheduler_enabled %}checked{% endif %} />
+            <span>Enable periodic checks</span>
+          </div>
+          <div class="checkbox" style="margin-top:8px">
+            <input type="checkbox" name="notify_on_first" {% if notify_on_first %}checked{% endif %} />
+            <span>Notify on first snapshot</span>
+          </div>
+          <div class="hint">
+            Last run:
+            {% if last_run %}
+              <span class="tag {% if last_run.status == 'ok' %}ok{% elif last_run.status == 'error' %}bad{% endif %}">{{ last_run.status }}</span>
+              <span class="muted">{{ format_ts(last_run.started_at) }}</span>
+            {% else %}
+              <span class="muted">-</span>
+            {% endif %}
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:16px">
+        <h3 style="margin:0 0 8px 0">Notifiers</h3>
+        <div class="hint">トークンはDBに保存されます（ローカル運用を想定）。</div>
+      </div>
+
+      <div class="panel" style="background: rgba(15,23,48,0.35)">
+        <div class="row-between">
+          <div>
+            <strong>stdout</strong>
+            <div class="hint">標準出力に通知を表示</div>
+          </div>
+          <label class="checkbox" style="margin:0">
+            <input type="checkbox" name="notifier_stdout_enabled" {% if notifiers["stdout"].enabled %}checked{% endif %} />
+            <span>Enabled</span>
+          </label>
+        </div>
+      </div>
+
+      <div class="panel" style="background: rgba(15,23,48,0.35)">
+        <div class="row-between">
+          <div>
+            <strong>macos</strong>
+            <div class="hint">macOS通知（Notification Center）</div>
+          </div>
+          <label class="checkbox" style="margin:0">
+            <input type="checkbox" name="notifier_macos_enabled" {% if notifiers["macos"].enabled %}checked{% endif %} />
+            <span>Enabled</span>
+          </label>
+        </div>
+      </div>
+
+      {% set tg = notifiers["telegram"] %}
+      {% set tg_has = (tg.config.get("bot_token") and tg.config.get("chat_id")) %}
+      <div class="panel" style="background: rgba(15,23,48,0.35)">
+        <div class="row-between">
+          <div>
+            <strong>telegram</strong>
+            <div class="hint">スマホ/PCで受け取れる（おすすめ）{% if tg_has %}<span class="tag ok">saved</span>{% endif %}</div>
+          </div>
+          <label class="checkbox" style="margin:0">
+            <input type="checkbox" name="notifier_telegram_enabled" {% if tg.enabled %}checked{% endif %} />
+            <span>Enabled</span>
+          </label>
+        </div>
+        <div class="grid2" style="margin-top:12px">
+          <div>
+            <label>Bot token (leave blank to keep)</label>
+            <input type="text" name="telegram_bot_token" value="" placeholder="123456:ABC-DEF..." />
+          </div>
+          <div>
+            <label>Chat ID (leave blank to keep)</label>
+            <input type="text" name="telegram_chat_id" value="" placeholder="e.g. 123456789" />
+          </div>
+        </div>
+      </div>
+
+      {% set po = notifiers["pushover"] %}
+      {% set po_has = (po.config.get("app_token") and po.config.get("user_key")) %}
+      <div class="panel" style="background: rgba(15,23,48,0.35)">
+        <div class="row-between">
+          <div>
+            <strong>pushover</strong>
+            <div class="hint">Pushover通知{% if po_has %}<span class="tag ok">saved</span>{% endif %}</div>
+          </div>
+          <label class="checkbox" style="margin:0">
+            <input type="checkbox" name="notifier_pushover_enabled" {% if po.enabled %}checked{% endif %} />
+            <span>Enabled</span>
+          </label>
+        </div>
+        <div class="grid2" style="margin-top:12px">
+          <div>
+            <label>App token (leave blank to keep)</label>
+            <input type="text" name="pushover_app_token" value="" />
+          </div>
+          <div>
+            <label>User key (leave blank to keep)</label>
+            <input type="text" name="pushover_user_key" value="" />
+          </div>
+        </div>
+      </div>
+
+      <div class="row" style="margin-top:16px; justify-content:flex-end">
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+  </div>
+{% endblock %}
+

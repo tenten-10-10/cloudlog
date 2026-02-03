@@ -1,0 +1,94 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="panel">
+    <div class="row-between">
+      <div>
+        <h2 style="margin:0">{% if mode == "edit" %}Edit Target{% else %}New Target{% endif %}</h2>
+        <div class="hint">まずはURLと、HTMLならselectorをなるべく小さく安定した範囲にしてください。</div>
+      </div>
+      <a class="btn" href="/">Back</a>
+    </div>
+  </div>
+
+  <div class="panel">
+    <form method="post" action="{% if mode == 'edit' %}/targets/{{ target.id }}/edit{% else %}/targets/new{% endif %}">
+      <div class="grid2">
+        <div>
+          <label>Name</label>
+          <input type="text" name="name" value="{{ target.name if target else '' }}" placeholder="e.g. My Site - News" required />
+        </div>
+        <div>
+          <label>Type</label>
+          <select name="type">
+            <option value="html" {% if (target and target.type == 'html') or (not target) %}selected{% endif %}>HTML</option>
+            <option value="rss" {% if target and target.type == 'rss' %}selected{% endif %}>RSS/Atom</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <label>URL</label>
+        <input type="url" name="url" value="{{ target.url if target else '' }}" placeholder="https://..." required />
+      </div>
+
+      <div class="grid2" style="margin-top:12px">
+        <div>
+          <label>CSS selector (HTML only)</label>
+          <input type="text" name="selector" value="{{ target.selector if target and target.selector else '' }}" placeholder="e.g. main .news-list" />
+          <div class="hint">空ならページ全体を対象にします（誤検知が増えがち）。</div>
+        </div>
+        <div>
+          <label>Extract</label>
+          <select name="extract">
+            <option value="text" {% if (target and target.extract == 'text') or (not target) %}selected{% endif %}>Text</option>
+            <option value="html" {% if target and target.extract == 'html' %}selected{% endif %}>HTML</option>
+          </select>
+          <div class="hint">Text推奨（空白やタグ差分のノイズを減らせます）。</div>
+        </div>
+      </div>
+
+      <div class="grid2" style="margin-top:12px">
+        <div>
+          <label>Timeout (seconds)</label>
+          <input type="number" name="timeout_seconds" min="5" max="120" value="{{ target.timeout_seconds if target else 20 }}" />
+        </div>
+        <div>
+          <label>Options</label>
+          <div class="checkbox">
+            <input type="checkbox" name="enabled" {% if (target and target.enabled) or (not target) %}checked{% endif %} />
+            <span>Enabled</span>
+          </div>
+          <div class="checkbox" style="margin-top:8px">
+            <input type="checkbox" name="render_js" {% if target and target.render_js %}checked{% endif %} />
+            <span>Render JS (Playwright)</span>
+          </div>
+        </div>
+      </div>
+
+      <div style="margin-top:12px">
+        <label>Request headers (optional)</label>
+        <textarea name="headers" placeholder="User-Agent: ...&#10;Authorization: ...">{{ headers_text }}</textarea>
+        <div class="hint">1行1ヘッダ（`Key: Value`）。空行と `#` コメントは無視します。</div>
+      </div>
+
+      <div style="margin-top:12px">
+        <label>Notify</label>
+        <div class="row">
+          {% for n in notifiers %}
+            <label class="checkbox" style="margin:0">
+              <input type="checkbox" name="notify" value="{{ n.name }}" {% if target and (n.name in target.notify) %}checked{% endif %} />
+              <span>{{ n.name }}</span>
+            </label>
+          {% endfor %}
+        </div>
+        <div class="hint">Settingsで通知先自体を有効化していないと送れません。</div>
+      </div>
+
+      <div class="row" style="margin-top:16px; justify-content:flex-end">
+        <button class="btn" type="submit" formaction="/preview" formmethod="post">Preview</button>
+        <button class="btn primary" type="submit">Save</button>
+      </div>
+    </form>
+  </div>
+{% endblock %}
+

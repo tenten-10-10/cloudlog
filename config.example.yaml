@@ -1,0 +1,40 @@
+# Copy to config.yaml and edit.
+#
+# Notes:
+# - For HTML targets, set `selector` to the smallest stable area to avoid false positives.
+# - For JS-heavy pages, set `render_js: true` (requires `pip install playwright` and `playwright install`).
+
+data_dir: ".sitewatcher"
+interval_seconds: 300
+notify_on_first: false
+
+notifiers:
+  stdout:
+    enabled: true
+  macos:
+    enabled: true
+  telegram:
+    enabled: false
+    bot_token_env: "TELEGRAM_BOT_TOKEN"
+    chat_id_env: "TELEGRAM_CHAT_ID"
+  pushover:
+    enabled: false
+    app_token_env: "PUSHOVER_APP_TOKEN"
+    user_key_env: "PUSHOVER_USER_KEY"
+
+targets:
+  - name: "Example HTML"
+    type: "html"
+    url: "https://example.com/"
+    selector: "main"
+    extract: "text"   # text | html
+    render_js: false
+    timeout_seconds: 20
+    notify: ["stdout", "macos"]
+
+  - name: "Example RSS"
+    type: "rss"
+    url: "https://example.com/feed.xml"
+    timeout_seconds: 20
+    notify: ["stdout"]
+
