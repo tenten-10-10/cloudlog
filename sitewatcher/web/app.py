@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 import secrets
+import sqlite3
 import threading
 import time
 from pathlib import Path
@@ -20,19 +22,25 @@ from sitewatcher.job import run_job_once
 from sitewatcher.monitor import check_target
 from sitewatcher.storage import StateStore
 from sitewatcher.web.auth import (
+    allow_registration,
     ensure_csrf_token,
+    get_user_id,
+    get_username,
+    hash_password,
     is_auth_disabled,
     is_authenticated,
     login_session,
     logout_session,
     validate_csrf,
-    verify_login,
+    verify_password,
 )
-from sitewatcher.web.db import AppDB, TargetRow, target_state_key
+from sitewatcher.web.db import AppDB, TargetRow, UserRow, target_state_key
 from sitewatcher.web.utils import format_ts, headers_to_text, parse_headers_text
 
 
 log = logging.getLogger("sitewatcher.web")
+
+_USERNAME_RE = re.compile(r"^[a-zA-Z0-9_.-]{3,32}$")
 
 
 def _resolve_data_dir() -> Path:
@@ -54,7 +62,8 @@ templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 app = FastAPI(title="SiteWatcher")
 app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
 
-_SESSION_SECRET = (os.getenv("SITEWATCHER_SECRET_KEY", "") or "").strip() or secrets.token_urlsafe(48)
+_SESSION_SECRET_ENV = (os.getenv("SITEWATCHER_SECRET_KEY", "") or "").strip()
+_SESSION_SECRET = _SESSION_SECRET_ENV or secrets.token_urlsafe(48)
 _HTTPS_ONLY = (os.getenv("SITEWATCHER_HTTPS_ONLY", "0") or "0").strip().lower() in {"1", "true", "yes", "on"}
 
 _ALLOWED_HOSTS_RAW = (os.getenv("SITEWATCHER_ALLOWED_HOSTS", "*") or "*").strip()
@@ -70,19 +79,25 @@ def _should_start_web_scheduler() -> bool:
 
 
 def _run_monitor_job(*, reason: str) -> None:
-    run_job_once(data_dir=DATA_DIR, reason=reason)
+    # Kept for backwards compatibility (no user context).
+    db = AppDB(DB_PATH)
+    users = db.list_users()
+    db.close()
+    if not users:
+        return
+    run_job_once(data_dir=DATA_DIR, user_id=users[0].id, reason=reason)
+
+
+def _run_monitor_job_for_user(*, user_id: int, reason: str) -> None:
+    run_job_once(data_dir=DATA_DIR, user_id=user_id, reason=reason)
 
 
 def _scheduler_loop() -> None:
     while True:
         try:
-            db = AppDB(DB_PATH)
-            interval = max(10, db.get_setting_int("interval_seconds", 300))
-            enabled = db.get_setting_bool("scheduler_enabled", True)
-            db.close()
+            from sitewatcher.worker import run_scheduler_tick
 
-            if enabled:
-                _run_monitor_job(reason="scheduler")
+            interval = run_scheduler_tick(data_dir=DATA_DIR, reason="web-scheduler")
         except Exception:
             log.exception("Scheduler loop error")
             interval = 60
@@ -93,9 +108,11 @@ def _scheduler_loop() -> None:
 @app.on_event("startup")
 def _startup() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    AppDB(DB_PATH).close()
-    if _SESSION_SECRET == "":  # pragma: no cover
-        log.warning("SITEWATCHER_SECRET_KEY is not set. Sessions will be ephemeral.")
+    db = AppDB(DB_PATH)
+    db.ensure_bootstrap_admin()
+    db.close()
+    if not _SESSION_SECRET_ENV:
+        log.warning("SITEWATCHER_SECRET_KEY is not set. Sessions will be ephemeral (not recommended for production).")
     if _ALLOWED_HOSTS == ["*"]:
         log.warning("SITEWATCHER_ALLOWED_HOSTS is '*' (not recommended for production).")
     if not _HTTPS_ONLY:
@@ -112,6 +129,8 @@ def _safe_next(next_path: str | None) -> str:
     p = str(next_path).strip()
     if not p.startswith("/"):
         return "/"
+    if p.startswith("//"):
+        return "/"
     if "://" in p:
         return "/"
     return p
@@ -120,8 +139,14 @@ def _safe_next(next_path: str | None) -> str:
 def _render(request: Request, template_name: str, context: dict[str, Any], *, status_code: int = 200) -> HTMLResponse:
     session = request.session
     csrf_token = ensure_csrf_token(session)
-    auth_user = session.get("auth_user") if is_authenticated(session) else None
-    base = {"request": request, "csrf_token": csrf_token, "auth_user": auth_user, "auth_disabled": is_auth_disabled()}
+    auth_user = get_username(session) if is_authenticated(session) else None
+    base = {
+        "request": request,
+        "csrf_token": csrf_token,
+        "auth_user": auth_user,
+        "auth_disabled": is_auth_disabled(),
+        "registration_allowed": allow_registration(),
+    }
     merged = {**base, **context}
     return templates.TemplateResponse(template_name, merged, status_code=status_code)
 
@@ -134,31 +159,44 @@ def _require_csrf_or_redirect(request: Request, token: str | None, *, redirect_t
     return RedirectResponse(url=redirect_to, status_code=303)
 
 
-@app.middleware("http")
-async def _auth_middleware(request: Request, call_next):  # type: ignore
-    path = request.url.path
-    if is_auth_disabled():
-        return await call_next(request)
-
-    if path.startswith("/static") or path in {"/login", "/health"}:
-        return await call_next(request)
-
-    if not is_authenticated(request.session):
-        return RedirectResponse(url=f"/login?next={quote(path)}", status_code=303)
-
-    response = await call_next(request)
+def _apply_security_headers(response) -> None:
     response.headers["X-Frame-Options"] = "DENY"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["Content-Security-Policy"] = (
         "default-src 'self'; "
-        "style-src 'self' 'unsafe-inline'; "
-        "script-src 'self' 'unsafe-inline'; "
+        "style-src 'self'; "
+        "script-src 'self'; "
         "img-src 'self' data:; "
+        "form-action 'self'; "
         "base-uri 'self'; "
         "frame-ancestors 'none'"
     )
-    return response
+    if _HTTPS_ONLY:
+        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+
+
+@app.middleware("http")
+async def _auth_middleware(request: Request, call_next):  # type: ignore
+    path = request.url.path
+    if path.startswith("/static"):
+        resp = await call_next(request)
+        _apply_security_headers(resp)
+        return resp
+
+    if is_auth_disabled() or path in {"/login", "/register", "/health"}:
+        resp = await call_next(request)
+        _apply_security_headers(resp)
+        return resp
+
+    if not is_authenticated(request.session):
+        resp = RedirectResponse(url=f"/login?next={quote(path)}", status_code=303)
+        _apply_security_headers(resp)
+        return resp
+
+    resp = await call_next(request)
+    _apply_security_headers(resp)
+    return resp
 
 
 def _load_state_map(targets: list[TargetRow]) -> dict[int, Any]:
@@ -172,15 +210,39 @@ def _load_state_map(targets: list[TargetRow]) -> dict[int, Any]:
         store.close()
 
 
+def _require_user(request: Request) -> UserRow:
+    if is_auth_disabled():
+        db = AppDB(DB_PATH)
+        db.ensure_bootstrap_admin()
+        users = db.list_users()
+        if not users:
+            uid = db.create_user(username="admin", password_hash=hash_password(secrets.token_urlsafe(24)), is_admin=True)
+            user = db.get_user(uid)
+        else:
+            user = users[0]
+        db.close()
+        if user is None:
+            raise RuntimeError("User bootstrap failed.")
+        return user
+
+    uid = get_user_id(request.session)
+    if uid is None:
+        raise RuntimeError("Not authenticated.")
+    db = AppDB(DB_PATH)
+    user = db.get_user(uid)
+    db.close()
+    if user is None:
+        raise RuntimeError("User not found.")
+    return user
+
+
 @app.get("/", response_class=HTMLResponse)
 def index(request: Request) -> HTMLResponse:
+    user = _require_user(request)
     db = AppDB(DB_PATH)
-    targets = db.list_targets(include_disabled=True)
-    notifiers = db.list_notifiers()
-    last_run = db.get_last_run()
-    interval_seconds = db.get_setting_int("interval_seconds", 300)
-    scheduler_enabled = db.get_setting_bool("scheduler_enabled", True)
-    notify_on_first = db.get_setting_bool("notify_on_first", False)
+    targets = db.list_targets(user.id, include_disabled=True)
+    notifiers = db.list_notifiers(user.id)
+    last_run = db.get_last_run(user.id)
     db.close()
 
     state_map = _load_state_map(targets)
@@ -189,13 +251,14 @@ def index(request: Request) -> HTMLResponse:
         request,
         "index.html",
         {
+            "user": user,
             "targets": targets,
             "state_map": state_map,
             "notifiers": notifiers,
             "last_run": last_run,
-            "interval_seconds": interval_seconds,
-            "scheduler_enabled": scheduler_enabled,
-            "notify_on_first": notify_on_first,
+            "interval_seconds": user.interval_seconds,
+            "scheduler_enabled": user.scheduler_enabled,
+            "notify_on_first": user.notify_on_first,
             "format_ts": format_ts,
         },
     )
@@ -206,14 +269,16 @@ async def run_now(request: Request) -> RedirectResponse:
     form = await request.form()
     if (r := _require_csrf_or_redirect(request, str(form.get("csrf_token", "")), redirect_to="/")) is not None:
         return r
-    threading.Thread(target=_run_monitor_job, kwargs={"reason": "manual"}, daemon=True).start()
+    user = _require_user(request)
+    threading.Thread(target=_run_monitor_job_for_user, kwargs={"user_id": user.id, "reason": "manual"}, daemon=True).start()
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/targets/new", response_class=HTMLResponse)
 def new_target(request: Request) -> HTMLResponse:
+    user = _require_user(request)
     db = AppDB(DB_PATH)
-    notifiers = db.list_notifiers()
+    notifiers = db.list_notifiers(user.id)
     db.close()
     return _render(
         request,
@@ -224,9 +289,10 @@ def new_target(request: Request) -> HTMLResponse:
 
 @app.get("/targets/{target_id}/edit", response_class=HTMLResponse)
 def edit_target(request: Request, target_id: int) -> HTMLResponse:
+    user = _require_user(request)
     db = AppDB(DB_PATH)
-    target = db.get_target(target_id)
-    notifiers = db.list_notifiers()
+    target = db.get_target(user.id, target_id)
+    notifiers = db.list_notifiers(user.id)
     db.close()
     if target is None:
         return _render(request, "error.html", {"message": "Target not found"}, status_code=404)
@@ -242,6 +308,7 @@ async def create_target(request: Request) -> RedirectResponse:
     form = await request.form()
     if (r := _require_csrf_or_redirect(request, str(form.get("csrf_token", "")), redirect_to="/targets/new")) is not None:
         return r
+    user = _require_user(request)
     name = str(form.get("name", "")).strip()
     url = str(form.get("url", "")).strip()
     target_type = str(form.get("type", "html")).strip().lower()
@@ -265,6 +332,7 @@ async def create_target(request: Request) -> RedirectResponse:
 
     db = AppDB(DB_PATH)
     db.create_target(
+        user.id,
         name=name,
         type=target_type,
         url=url,
@@ -285,6 +353,7 @@ async def update_target(request: Request, target_id: int) -> RedirectResponse:
     form = await request.form()
     if (r := _require_csrf_or_redirect(request, str(form.get("csrf_token", "")), redirect_to=f"/targets/{target_id}/edit")) is not None:
         return r
+    user = _require_user(request)
     name = str(form.get("name", "")).strip()
     url = str(form.get("url", "")).strip()
     target_type = str(form.get("type", "html")).strip().lower()
@@ -303,10 +372,8 @@ async def update_target(request: Request, target_id: int) -> RedirectResponse:
     notify = [str(x) for x in notify_values]
 
     db = AppDB(DB_PATH)
-    if db.get_target(target_id) is None:
-        db.close()
-        return RedirectResponse(url="/", status_code=303)
-    db.update_target(
+    ok = db.update_target(
+        user.id,
         target_id,
         name=name,
         type=target_type,
@@ -320,6 +387,8 @@ async def update_target(request: Request, target_id: int) -> RedirectResponse:
         enabled=bool(enabled),
     )
     db.close()
+    if not ok:
+        return RedirectResponse(url="/", status_code=303)
     return RedirectResponse(url="/", status_code=303)
 
 
@@ -328,29 +397,29 @@ async def delete_target(request: Request, target_id: int) -> RedirectResponse:
     form = await request.form()
     if (r := _require_csrf_or_redirect(request, str(form.get("csrf_token", "")), redirect_to="/")) is not None:
         return r
+    user = _require_user(request)
     db = AppDB(DB_PATH)
-    db.delete_target(target_id)
+    db.delete_target(user.id, target_id)
     db.close()
     return RedirectResponse(url="/", status_code=303)
 
 
 @app.get("/settings", response_class=HTMLResponse)
 def settings(request: Request) -> HTMLResponse:
+    user = _require_user(request)
     db = AppDB(DB_PATH)
-    notifiers = {n.name: n for n in db.list_notifiers()}
-    interval_seconds = db.get_setting_int("interval_seconds", 300)
-    scheduler_enabled = db.get_setting_bool("scheduler_enabled", True)
-    notify_on_first = db.get_setting_bool("notify_on_first", False)
-    last_run = db.get_last_run()
+    notifiers = {n.name: n for n in db.list_notifiers(user.id)}
+    last_run = db.get_last_run(user.id)
     db.close()
     return _render(
         request,
         "settings.html",
         {
+            "user": user,
             "notifiers": notifiers,
-            "interval_seconds": interval_seconds,
-            "scheduler_enabled": scheduler_enabled,
-            "notify_on_first": notify_on_first,
+            "interval_seconds": user.interval_seconds,
+            "scheduler_enabled": user.scheduler_enabled,
+            "notify_on_first": user.notify_on_first,
             "last_run": last_run,
             "format_ts": format_ts,
         },
@@ -362,6 +431,7 @@ async def save_settings(request: Request) -> RedirectResponse:
     form = await request.form()
     if (r := _require_csrf_or_redirect(request, str(form.get("csrf_token", "")), redirect_to="/settings")) is not None:
         return r
+    user = _require_user(request)
     db = AppDB(DB_PATH)
 
     try:
@@ -373,12 +443,15 @@ async def save_settings(request: Request) -> RedirectResponse:
     scheduler_enabled = form.get("scheduler_enabled") in {"on", "1", "true", True}
     notify_on_first = form.get("notify_on_first") in {"on", "1", "true", True}
 
-    db.set_setting("interval_seconds", str(interval_seconds))
-    db.set_setting("scheduler_enabled", "1" if scheduler_enabled else "0")
-    db.set_setting("notify_on_first", "1" if notify_on_first else "0")
+    db.update_user_settings(
+        user.id,
+        interval_seconds=interval_seconds,
+        scheduler_enabled=bool(scheduler_enabled),
+        notify_on_first=bool(notify_on_first),
+    )
 
     for name in ["stdout", "macos", "telegram", "pushover"]:
-        current = db.get_notifier(name)
+        current = db.get_notifier(user.id, name)
         current_cfg = dict(current.config) if current else {}
         enabled = form.get(f"notifier_{name}_enabled") in {"on", "1", "true", True}
 
@@ -397,7 +470,7 @@ async def save_settings(request: Request) -> RedirectResponse:
             if user_key:
                 current_cfg["user_key"] = user_key
 
-        db.upsert_notifier(name, enabled=bool(enabled), config=current_cfg)
+        db.upsert_notifier(user.id, name, enabled=bool(enabled), config=current_cfg)
 
     db.close()
     return RedirectResponse(url="/settings", status_code=303)
@@ -468,7 +541,7 @@ def login_get(request: Request, next: str | None = None) -> HTMLResponse:
     if is_auth_disabled():
         return _render(request, "error.html", {"message": "Auth is disabled."}, status_code=400)
     if is_authenticated(request.session):
-        return _render(request, "error.html", {"message": "Already logged in."}, status_code=400)
+        return RedirectResponse(url=_safe_next(next), status_code=303)  # type: ignore[return-value]
     return _render(request, "login.html", {"next": _safe_next(next), "error": ""})
 
 
@@ -485,13 +558,71 @@ async def login_post(request: Request) -> RedirectResponse | HTMLResponse:
     password = str(form.get("password", "")).strip()
     next_path = _safe_next(str(form.get("next", "") or ""))
 
-    ok, msg = verify_login(username, password)
-    if not ok:
-        return _render(request, "login.html", {"next": next_path, "error": msg}, status_code=401)
+    db = AppDB(DB_PATH)
+    db.ensure_bootstrap_admin()
+    user_auth = db.get_user_auth_by_username(username)
+    db.close()
+    if user_auth is None or not verify_password(password, user_auth.password_hash):
+        return _render(request, "login.html", {"next": next_path, "error": "Invalid username or password."}, status_code=401)
 
     request.session.clear()
-    login_session(request.session, msg)
+    login_session(request.session, user_id=user_auth.id, username=user_auth.username)
     return RedirectResponse(url=next_path, status_code=303)
+
+
+@app.get("/register", response_class=HTMLResponse)
+def register_get(request: Request, next: str | None = None) -> HTMLResponse:
+    if is_auth_disabled():
+        return _render(request, "error.html", {"message": "Auth is disabled."}, status_code=400)
+    if not allow_registration():
+        return _render(request, "error.html", {"message": "Registration is disabled."}, status_code=403)
+    if is_authenticated(request.session):
+        return RedirectResponse(url=_safe_next(next), status_code=303)  # type: ignore[return-value]
+    return _render(request, "register.html", {"next": _safe_next(next), "error": ""})
+
+
+@app.post("/register")
+async def register_post(request: Request) -> RedirectResponse | HTMLResponse:
+    if is_auth_disabled():
+        return RedirectResponse(url="/", status_code=303)
+    if not allow_registration():
+        return _render(request, "error.html", {"message": "Registration is disabled."}, status_code=403)
+
+    form = await request.form()
+    csrf = str(form.get("csrf_token", "") or "")
+    if not validate_csrf(request.session, csrf):
+        return _render(request, "register.html", {"next": "/", "error": "Invalid CSRF token."}, status_code=400)
+
+    username = str(form.get("username", "")).strip()
+    password = str(form.get("password", "")).strip()
+    password2 = str(form.get("password2", "")).strip()
+    next_path = _safe_next(str(form.get("next", "") or ""))
+
+    if not _USERNAME_RE.match(username):
+        return _render(
+            request,
+            "register.html",
+            {"next": next_path, "error": "Username must be 3-32 chars: a-z A-Z 0-9 _ . -"},
+            status_code=400,
+        )
+    if len(password) < 10:
+        return _render(request, "register.html", {"next": next_path, "error": "Password must be at least 10 characters."}, status_code=400)
+    if password != password2:
+        return _render(request, "register.html", {"next": next_path, "error": "Passwords do not match."}, status_code=400)
+
+    ph = hash_password(password)
+    db = AppDB(DB_PATH)
+    db.ensure_bootstrap_admin()
+    try:
+        user_id = db.create_user(username=username, password_hash=ph, is_admin=False)
+    except sqlite3.IntegrityError:
+        db.close()
+        return _render(request, "register.html", {"next": next_path, "error": "Username is already taken."}, status_code=409)
+    db.close()
+
+    request.session.clear()
+    login_session(request.session, user_id=user_id, username=username)
+    return RedirectResponse(url=next_path or "/", status_code=303)
 
 
 @app.post("/logout")

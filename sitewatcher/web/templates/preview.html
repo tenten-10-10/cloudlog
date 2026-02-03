@@ -1,47 +1,54 @@
 {% extends "base.html" %}
 {% block content %}
-  <div class="panel">
-    <div class="row-between">
-      <div>
-        <h2 style="margin:0">Preview</h2>
-        <div class="hint">抽出結果が意図通りか確認してください。</div>
+  <div class="stack">
+    <div class="card">
+      <div class="card__header">
+        <div class="stack">
+          <h1 class="card__title">プレビュー</h1>
+          <div class="muted small">抽出結果が意図通りか確認してください。</div>
+        </div>
+        <a class="btn btn--ghost" href="/">戻る</a>
       </div>
-      <a class="btn" href="javascript:history.back()">Back</a>
-    </div>
-  </div>
+      <div class="card__body">
+        <div class="stack">
+          <div class="row">
+            <span class="badge badge--accent">{{ type | upper }}</span>
+            <span class="badge">Render JS: {{ "ON" if render_js else "OFF" }}</span>
+            <span class="badge">Extract: {{ extract }}</span>
+            <span class="badge">Timeout: {{ timeout_seconds }}s</span>
+          </div>
 
-  <div class="panel">
-    <div class="row">
-      <div class="pill">Type: <strong>{{ type }}</strong></div>
-      <div class="pill">Render JS: <strong>{{ "ON" if render_js else "OFF" }}</strong></div>
-      <div class="pill">Extract: <strong>{{ extract }}</strong></div>
-      <div class="pill">Timeout: <strong>{{ timeout_seconds }}s</strong></div>
-    </div>
-    <div style="margin-top:10px">
-      <div class="muted">URL</div>
-      <div><a href="{{ url }}" target="_blank" rel="noreferrer">{{ url }}</a></div>
-    </div>
-    {% if selector %}
-      <div style="margin-top:10px">
-        <div class="muted">selector</div>
-        <div><code>{{ selector }}</code></div>
+          <div class="stack stack--tight">
+            <div class="muted small">URL</div>
+            <div><a href="{{ url }}" target="_blank" rel="noreferrer">{{ url }}</a></div>
+            {% if selector %}
+              <div class="muted small">selector</div>
+              <div><code>{{ selector }}</code></div>
+            {% endif %}
+          </div>
+        </div>
       </div>
-    {% endif %}
-  </div>
+    </div>
 
-  <div class="panel">
-    {% if result.ok %}
-      <div class="row">
-        <span class="tag ok">OK</span>
-        <span class="muted">signature: <code>{{ result.signature }}</code></span>
+    <div class="card">
+      <div class="card__header">
+        <h2 class="card__title">抽出結果</h2>
+        {% if result.ok %}
+          <span class="badge badge--ok">OK</span>
+        {% else %}
+          <span class="badge badge--bad">ERROR</span>
+        {% endif %}
       </div>
-      <pre style="margin-top:12px">{{ result.content }}</pre>
-    {% else %}
-      <div class="row">
-        <span class="tag bad">ERROR</span>
-        <span class="muted">{{ result.error }}</span>
+      <div class="card__body">
+        {% if result.ok %}
+          <div class="muted small">signature: <code>{{ result.signature }}</code></div>
+          <div class="stack">
+            <pre>{{ result.content }}</pre>
+          </div>
+        {% else %}
+          <div class="muted">{{ result.error }}</div>
+        {% endif %}
       </div>
-    {% endif %}
+    </div>
   </div>
 {% endblock %}
-

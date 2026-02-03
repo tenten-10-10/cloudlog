@@ -1,94 +1,140 @@
 {% extends "base.html" %}
 {% block content %}
-  <div class="panel">
-    <div class="row-between">
-      <div>
-        <h2 style="margin:0">{% if mode == "edit" %}Edit Target{% else %}New Target{% endif %}</h2>
-        <div class="hint">まずはURLと、HTMLならselectorをなるべく小さく安定した範囲にしてください。</div>
+  <div class="stack">
+    <div class="card">
+      <div class="card__header">
+        <div class="stack">
+          <h1 class="card__title">{% if mode == "edit" %}監視を編集{% else %}監視を追加{% endif %}</h1>
+          <div class="muted small">HTMLは selector を小さく安定した範囲にすると誤検知が減ります。</div>
+        </div>
+        <a class="btn btn--ghost" href="/">戻る</a>
       </div>
-      <a class="btn" href="/">Back</a>
+      <div class="card__body">
+        <form method="post" action="{% if mode == 'edit' %}/targets/{{ target.id }}/edit{% else %}/targets/new{% endif %}" class="stack">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+
+          <div class="grid grid--2">
+            <div class="field">
+              <label>名前</label>
+              <input class="input" type="text" name="name" value="{{ target.name if target else '' }}" placeholder="例: お知らせ / 新着" required />
+              <div class="help">通知に表示される名前です。</div>
+            </div>
+            <div class="field">
+              <label>種類</label>
+              <select class="select" name="type" data-target-type>
+                <option value="html" {% if (target and target.type == 'html') or (not target) %}selected{% endif %}>HTML</option>
+                <option value="rss" {% if target and target.type == 'rss' %}selected{% endif %}>RSS/Atom</option>
+              </select>
+              <div class="help">RSSは「最新1件」を監視します。</div>
+            </div>
+          </div>
+
+          <div class="field">
+            <label>URL</label>
+            <input class="input" type="url" name="url" value="{{ target.url if target else '' }}" placeholder="https://..." required />
+          </div>
+
+          <div class="card card--soft" data-only-type="html">
+            <div class="card__header">
+              <h2 class="card__title">HTML 抽出</h2>
+              <span class="badge">おすすめ: Text</span>
+            </div>
+            <div class="card__body">
+              <div class="grid grid--2">
+                <div class="field">
+                  <label>更新検知範囲（CSS selector）</label>
+                  <input class="input" type="text" name="selector" value="{{ target.selector if target and target.selector else '' }}" placeholder="例: main .news-list / #content > ul" />
+                  <div class="help">空ならページ全体を対象にします（誤検知が増えがち）。</div>
+                </div>
+                <div class="field">
+                  <label>抽出モード</label>
+                  <select class="select" name="extract">
+                    <option value="text" {% if (target and target.extract == 'text') or (not target) %}selected{% endif %}>Text</option>
+                    <option value="html" {% if target and target.extract == 'html' %}selected{% endif %}>HTML</option>
+                  </select>
+                  <div class="help">Text推奨（空白やタグ差分のノイズを減らせます）。</div>
+                </div>
+              </div>
+
+              <div class="row">
+                <label class="switch">
+                  <input type="checkbox" name="render_js" {% if target and target.render_js %}checked{% endif %} />
+                  <span>JSレンダリング（Playwright）</span>
+                </label>
+                <span class="help">動的サイト用。別途Playwright導入が必要です。</span>
+              </div>
+            </div>
+          </div>
+
+          <div class="card card--soft" data-only-type="rss">
+            <div class="card__header">
+              <h2 class="card__title">RSS/Atom</h2>
+              <span class="badge">最新1件</span>
+            </div>
+            <div class="card__body">
+              <div class="muted small">
+                RSS/Atomはフィードの並び順を信頼して「先頭のエントリ」が変わったら通知します。
+              </div>
+            </div>
+          </div>
+
+          <div class="card card--soft">
+            <div class="card__header">
+              <h2 class="card__title">詳細</h2>
+              <span class="badge">任意</span>
+            </div>
+            <div class="card__body">
+              <div class="grid grid--2">
+                <div class="field">
+                  <label>タイムアウト（秒）</label>
+                  <input class="input" type="number" name="timeout_seconds" min="5" max="120" value="{{ target.timeout_seconds if target else 20 }}" />
+                </div>
+                <div class="field">
+                  <label>状態</label>
+                  <div class="row">
+                    <label class="switch">
+                      <input type="checkbox" name="enabled" {% if (target and target.enabled) or (not target) %}checked{% endif %} />
+                      <span>この監視を有効にする</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              <div class="field">
+                <label>リクエストヘッダ（任意）</label>
+                <textarea name="headers" placeholder="User-Agent: ...&#10;Authorization: ...">{{ headers_text }}</textarea>
+                <div class="help">1行1ヘッダ（`Key: Value`）。空行と `#` コメントは無視します。</div>
+              </div>
+            </div>
+          </div>
+
+          <div class="card card--soft">
+            <div class="card__header">
+              <h2 class="card__title">通知</h2>
+              <span class="badge">複数選択</span>
+            </div>
+            <div class="card__body">
+              <div class="row">
+                {% for n in notifiers %}
+                  <label class="checkpill">
+                    <input type="checkbox" name="notify" value="{{ n.name }}" {% if target and (n.name in target.notify) %}checked{% endif %} />
+                    <span>{{ n.name }}</span>
+                  </label>
+                {% endfor %}
+              </div>
+              <div class="help">Settingsで通知先自体を有効化していないと送れません。</div>
+            </div>
+          </div>
+
+          <div class="row row--between">
+            <div class="muted small">保存前に「プレビュー」で抽出結果を確認すると安全です。</div>
+            <div class="row">
+              <button class="btn btn--ghost" type="submit" formaction="/preview" formmethod="post">プレビュー</button>
+              <button class="btn btn--primary" type="submit">保存</button>
+            </div>
+          </div>
+        </form>
+      </div>
     </div>
   </div>
-
-  <div class="panel">
-    <form method="post" action="{% if mode == 'edit' %}/targets/{{ target.id }}/edit{% else %}/targets/new{% endif %}">
-      <div class="grid2">
-        <div>
-          <label>Name</label>
-          <input type="text" name="name" value="{{ target.name if target else '' }}" placeholder="e.g. My Site - News" required />
-        </div>
-        <div>
-          <label>Type</label>
-          <select name="type">
-            <option value="html" {% if (target and target.type == 'html') or (not target) %}selected{% endif %}>HTML</option>
-            <option value="rss" {% if target and target.type == 'rss' %}selected{% endif %}>RSS/Atom</option>
-          </select>
-        </div>
-      </div>
-
-      <div style="margin-top:12px">
-        <label>URL</label>
-        <input type="url" name="url" value="{{ target.url if target else '' }}" placeholder="https://..." required />
-      </div>
-
-      <div class="grid2" style="margin-top:12px">
-        <div>
-          <label>CSS selector (HTML only)</label>
-          <input type="text" name="selector" value="{{ target.selector if target and target.selector else '' }}" placeholder="e.g. main .news-list" />
-          <div class="hint">空ならページ全体を対象にします（誤検知が増えがち）。</div>
-        </div>
-        <div>
-          <label>Extract</label>
-          <select name="extract">
-            <option value="text" {% if (target and target.extract == 'text') or (not target) %}selected{% endif %}>Text</option>
-            <option value="html" {% if target and target.extract == 'html' %}selected{% endif %}>HTML</option>
-          </select>
-          <div class="hint">Text推奨（空白やタグ差分のノイズを減らせます）。</div>
-        </div>
-      </div>
-
-      <div class="grid2" style="margin-top:12px">
-        <div>
-          <label>Timeout (seconds)</label>
-          <input type="number" name="timeout_seconds" min="5" max="120" value="{{ target.timeout_seconds if target else 20 }}" />
-        </div>
-        <div>
-          <label>Options</label>
-          <div class="checkbox">
-            <input type="checkbox" name="enabled" {% if (target and target.enabled) or (not target) %}checked{% endif %} />
-            <span>Enabled</span>
-          </div>
-          <div class="checkbox" style="margin-top:8px">
-            <input type="checkbox" name="render_js" {% if target and target.render_js %}checked{% endif %} />
-            <span>Render JS (Playwright)</span>
-          </div>
-        </div>
-      </div>
-
-      <div style="margin-top:12px">
-        <label>Request headers (optional)</label>
-        <textarea name="headers" placeholder="User-Agent: ...&#10;Authorization: ...">{{ headers_text }}</textarea>
-        <div class="hint">1行1ヘッダ（`Key: Value`）。空行と `#` コメントは無視します。</div>
-      </div>
-
-      <div style="margin-top:12px">
-        <label>Notify</label>
-        <div class="row">
-          {% for n in notifiers %}
-            <label class="checkbox" style="margin:0">
-              <input type="checkbox" name="notify" value="{{ n.name }}" {% if target and (n.name in target.notify) %}checked{% endif %} />
-              <span>{{ n.name }}</span>
-            </label>
-          {% endfor %}
-        </div>
-        <div class="hint">Settingsで通知先自体を有効化していないと送れません。</div>
-      </div>
-
-      <div class="row" style="margin-top:16px; justify-content:flex-end">
-        <button class="btn" type="submit" formaction="/preview" formmethod="post">Preview</button>
-        <button class="btn primary" type="submit">Save</button>
-      </div>
-    </form>
-  </div>
 {% endblock %}
-

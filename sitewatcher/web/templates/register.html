@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block content %}
+  <div class="auth">
+    <div class="card auth__card">
+      <div class="card__header">
+        <div class="stack">
+          <h1 class="card__title">新規登録</h1>
+          <div class="muted small">ユーザーごとに監視/通知が分離されます。</div>
+        </div>
+        <a class="btn btn--ghost btn--sm" href="/login">ログイン</a>
+      </div>
+      <div class="card__body">
+        {% if error %}
+          <div class="row">
+            <span class="badge badge--bad">エラー</span>
+            <span class="muted small">{{ error }}</span>
+          </div>
+        {% endif %}
+
+        <form method="post" action="/register" class="stack">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+          <input type="hidden" name="next" value="{{ next }}" />
+
+          <div class="field">
+            <label>ユーザー名</label>
+            <input class="input" type="text" name="username" autocomplete="username" required />
+            <div class="help">3〜32文字（英数字/`_`/`.`/`-`）。</div>
+          </div>
+
+          <div class="grid grid--2">
+            <div class="field">
+              <label>パスワード</label>
+              <div class="row row--nowrap">
+                <input id="register_password" class="input grow" type="password" name="password" autocomplete="new-password" required />
+                <button class="btn btn--ghost btn--sm" type="button" data-reveal-for="register_password">表示</button>
+              </div>
+              <div class="help">10文字以上を推奨します。</div>
+            </div>
+            <div class="field">
+              <label>パスワード（確認）</label>
+              <input class="input" type="password" name="password2" autocomplete="new-password" required />
+            </div>
+          </div>
+
+          <div class="row row--between">
+            <a class="btn btn--ghost" href="/login">既にアカウントがあります</a>
+            <button class="btn btn--primary" type="submit">作成してログイン</button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+{% endblock %}
+

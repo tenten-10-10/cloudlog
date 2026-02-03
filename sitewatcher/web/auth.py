@@ -5,38 +5,25 @@ import hashlib
 import hmac
 import os
 import secrets
-from dataclasses import dataclass
 from typing import Optional
 
 
-AUTH_MODE_ENV = "SITEWATCHER_AUTH_MODE"  # password | disabled
-ADMIN_USER_ENV = "SITEWATCHER_ADMIN_USER"
-ADMIN_PASSWORD_ENV = "SITEWATCHER_ADMIN_PASSWORD"
-ADMIN_PASSWORD_HASH_ENV = "SITEWATCHER_ADMIN_PASSWORD_HASH"
+AUTH_MODE_ENV = "SITEWATCHER_AUTH_MODE"  # enabled | disabled
+ALLOW_REGISTRATION_ENV = "SITEWATCHER_ALLOW_REGISTRATION"
 
-SESSION_AUTH_KEY = "auth_ok"
-SESSION_USER_KEY = "auth_user"
+SESSION_USER_ID_KEY = "user_id"
+SESSION_USERNAME_KEY = "username"
 SESSION_CSRF_KEY = "csrf_token"
 
 
-@dataclass(frozen=True)
-class AdminAuthConfig:
-    mode: str
-    username: str
-    password_hash: Optional[str]
-    password_plain: Optional[str]
-
-
-def get_auth_config() -> AdminAuthConfig:
-    mode = (os.getenv(AUTH_MODE_ENV, "password") or "password").strip().lower()
-    username = (os.getenv(ADMIN_USER_ENV, "admin") or "admin").strip()
-    password_hash = (os.getenv(ADMIN_PASSWORD_HASH_ENV, "") or "").strip() or None
-    password_plain = (os.getenv(ADMIN_PASSWORD_ENV, "") or "").strip() or None
-    return AdminAuthConfig(mode=mode, username=username, password_hash=password_hash, password_plain=password_plain)
-
-
 def is_auth_disabled() -> bool:
-    return get_auth_config().mode == "disabled"
+    mode = (os.getenv(AUTH_MODE_ENV, "enabled") or "enabled").strip().lower()
+    return mode == "disabled"
+
+
+def allow_registration() -> bool:
+    raw = (os.getenv(ALLOW_REGISTRATION_ENV, "1") or "1").strip().lower()
+    return raw in {"1", "true", "yes", "on"}
 
 
 def _b64e(b: bytes) -> str:
@@ -69,27 +56,6 @@ def verify_password(password: str, encoded: str) -> bool:
     return hmac.compare_digest(dk, expected)
 
 
-def verify_login(username: str, password: str) -> tuple[bool, str]:
-    cfg = get_auth_config()
-    if cfg.mode == "disabled":
-        return True, cfg.username
-
-    if username != cfg.username:
-        return False, "Invalid username or password."
-
-    if cfg.password_hash:
-        if verify_password(password, cfg.password_hash):
-            return True, username
-        return False, "Invalid username or password."
-
-    if cfg.password_plain:
-        if hmac.compare_digest(password, cfg.password_plain):
-            return True, username
-        return False, "Invalid username or password."
-
-    return False, "Server auth is not configured. Set SITEWATCHER_ADMIN_PASSWORD_HASH (recommended) or SITEWATCHER_ADMIN_PASSWORD."
-
-
 def ensure_csrf_token(session: dict) -> str:
     token = session.get(SESSION_CSRF_KEY)
     if isinstance(token, str) and token:
@@ -108,17 +74,35 @@ def validate_csrf(session: dict, token: str | None) -> bool:
     return hmac.compare_digest(expected, str(token))
 
 
+def get_user_id(session: dict) -> Optional[int]:
+    raw = session.get(SESSION_USER_ID_KEY)
+    if raw is None:
+        return None
+    try:
+        return int(raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def get_username(session: dict) -> Optional[str]:
+    raw = session.get(SESSION_USERNAME_KEY)
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    return s or None
+
+
 def is_authenticated(session: dict) -> bool:
-    return bool(session.get(SESSION_AUTH_KEY))
+    return get_user_id(session) is not None
 
 
-def login_session(session: dict, username: str) -> None:
-    session[SESSION_AUTH_KEY] = True
-    session[SESSION_USER_KEY] = username
+def login_session(session: dict, *, user_id: int, username: str) -> None:
+    session[SESSION_USER_ID_KEY] = int(user_id)
+    session[SESSION_USERNAME_KEY] = username
     ensure_csrf_token(session)
 
 
 def logout_session(session: dict) -> None:
-    session.pop(SESSION_AUTH_KEY, None)
-    session.pop(SESSION_USER_KEY, None)
+    session.pop(SESSION_USER_ID_KEY, None)
+    session.pop(SESSION_USERNAME_KEY, None)
 

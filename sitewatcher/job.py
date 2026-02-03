@@ -14,17 +14,17 @@ log = logging.getLogger("sitewatcher.job")
 RunStatus = Literal["ok", "error", "skipped"]
 
 
-def run_job_once(*, data_dir: Path, reason: str) -> RunStatus:
-    lock = FileLock(data_dir / "run.lock")
+def run_job_once(*, data_dir: Path, user_id: int, reason: str) -> RunStatus:
+    lock = FileLock(data_dir / f"run.{int(user_id)}.lock")
     with lock.acquired() as ok:
         if not ok:
-            log.info("Skip run (%s): lock busy", reason)
+            log.info("Skip run (%s): lock busy (user_id=%s)", reason, user_id)
             return "skipped"
 
         db_path = data_dir / "app.sqlite3"
         db = AppDB(db_path)
-        run_id = db.insert_run()
-        config = db.build_monitor_config()
+        run_id = db.insert_run(user_id)
+        config = db.build_monitor_config(user_id)
         db.close()
 
         status: RunStatus = "ok"
@@ -41,4 +41,3 @@ def run_job_once(*, data_dir: Path, reason: str) -> RunStatus:
         db2.close()
 
         return status
-

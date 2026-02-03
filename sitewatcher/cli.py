@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import logging
 import os
 import time
@@ -10,6 +11,7 @@ from dotenv import load_dotenv
 
 from sitewatcher.config import load_config
 from sitewatcher.monitor import run_once
+from sitewatcher.worker import loop as worker_loop
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -28,6 +30,14 @@ def _build_parser() -> argparse.ArgumentParser:
     web.add_argument("--port", type=int, default=8000)
     web.add_argument("--reload", action="store_true")
     web.add_argument("--data-dir", type=Path, default=Path(".sitewatcher"))
+
+    worker = sub.add_parser("worker", help="Run background scheduler (recommended for production)")
+    worker.add_argument("--data-dir", type=Path, default=Path(".sitewatcher"))
+    worker.add_argument("--once", action="store_true")
+
+    hp = sub.add_parser("hash-password", help="Generate password hash for SITEWATCHER_ADMIN_PASSWORD_HASH")
+    hp.add_argument("--password", default="")
+    hp.add_argument("--iterations", type=int, default=260_000)
 
     return parser
 
@@ -65,6 +75,20 @@ def main(argv: list[str] | None = None) -> int:
             logging.error("uvicorn is not installed. Install dependencies: pip install -r requirements.txt")
             return 1
         uvicorn.run("sitewatcher.web.app:app", host=args.host, port=int(args.port), reload=bool(args.reload))
+        return 0
+
+    if args.command == "worker":
+        os.environ["SITEWATCHER_DATA_DIR"] = str(args.data_dir)
+        worker_loop(once=bool(args.once))
+        return 0
+
+    if args.command == "hash-password":
+        from sitewatcher.web.auth import hash_password
+
+        password = str(args.password or "").strip()
+        if not password:
+            password = getpass.getpass("Password: ")
+        print(hash_password(password, iterations=int(args.iterations)))
         return 0
 
     parser.error(f"Unknown command: {args.command}")

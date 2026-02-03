@@ -1,0 +1,9 @@
+{
+  # email you@example.com
+}
+
+example.com {
+  reverse_proxy web:8000
+  encode gzip
+}
+

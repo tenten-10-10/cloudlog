@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, Iterable, Mapping
@@ -35,26 +36,30 @@ def _build_notifiers(config: Mapping[str, Any]) -> dict[str, Notifier]:
         out["macos"] = MacOSNotifier()
 
     if (tcfg := (ncfg.get("telegram", {}) or {})).get("enabled", False):
-        bot_token = str(tcfg.get("bot_token", "") or "").strip()
-        chat_id = str(tcfg.get("chat_id", "") or "").strip()
-        if bot_token and chat_id:
-            out["telegram"] = TelegramNotifier(TelegramConfig(bot_token=bot_token, chat_id=chat_id))
-        else:
-            out["telegram"] = TelegramNotifier.from_env(
-                str(tcfg.get("bot_token_env", "TELEGRAM_BOT_TOKEN")),
-                str(tcfg.get("chat_id_env", "TELEGRAM_CHAT_ID")),
-            )
+        try:
+            bot_token_env = str(tcfg.get("bot_token_env", "TELEGRAM_BOT_TOKEN"))
+            chat_id_env = str(tcfg.get("chat_id_env", "TELEGRAM_CHAT_ID"))
+            bot_token = str(tcfg.get("bot_token", "") or "").strip() or os.getenv(bot_token_env, "").strip()
+            chat_id = str(tcfg.get("chat_id", "") or "").strip() or os.getenv(chat_id_env, "").strip()
+            if bot_token and chat_id:
+                out["telegram"] = TelegramNotifier(TelegramConfig(bot_token=bot_token, chat_id=chat_id))
+            else:
+                logging.warning("Telegram enabled but not configured (missing bot_token/chat_id).")
+        except Exception:
+            logging.exception("Failed to configure Telegram notifier")
 
     if (pcfg := (ncfg.get("pushover", {}) or {})).get("enabled", False):
-        app_token = str(pcfg.get("app_token", "") or "").strip()
-        user_key = str(pcfg.get("user_key", "") or "").strip()
-        if app_token and user_key:
-            out["pushover"] = PushoverNotifier(PushoverConfig(app_token=app_token, user_key=user_key))
-        else:
-            out["pushover"] = PushoverNotifier.from_env(
-                str(pcfg.get("app_token_env", "PUSHOVER_APP_TOKEN")),
-                str(pcfg.get("user_key_env", "PUSHOVER_USER_KEY")),
-            )
+        try:
+            app_token_env = str(pcfg.get("app_token_env", "PUSHOVER_APP_TOKEN"))
+            user_key_env = str(pcfg.get("user_key_env", "PUSHOVER_USER_KEY"))
+            app_token = str(pcfg.get("app_token", "") or "").strip() or os.getenv(app_token_env, "").strip()
+            user_key = str(pcfg.get("user_key", "") or "").strip() or os.getenv(user_key_env, "").strip()
+            if app_token and user_key:
+                out["pushover"] = PushoverNotifier(PushoverConfig(app_token=app_token, user_key=user_key))
+            else:
+                logging.warning("Pushover enabled but not configured (missing app_token/user_key).")
+        except Exception:
+            logging.exception("Failed to configure Pushover notifier")
 
     return out
 
@@ -139,12 +144,12 @@ def _build_change_message(
     new_content: str,
     max_chars: int = 3500,
 ) -> str:
-    header = f"Target: {target_name}\nType: {target_type}\nURL: {url}\n"
+    header = f"監視: {target_name}\n種類: {target_type}\nURL: {url}\n"
     if old_state is None:
-        body = f"\nFirst snapshot stored.\n\n{new_content}"
+        body = f"\n初回スナップショットを保存しました。\n\n{new_content}"
     else:
         diff = unified_diff(old_state.content, new_content, fromfile="before", tofile="after", n=3)
-        body = f"\nChange detected.\n\n{diff or '(diff unavailable)'}"
+        body = f"\n変更を検知しました。\n\n{diff or '(diff unavailable)'}"
 
     msg = header + body
     if len(msg) > max_chars:

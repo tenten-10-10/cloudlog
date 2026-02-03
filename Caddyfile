@@ -1,0 +1,9 @@
+{
+  # Optional (recommended): set EMAIL in .env for ACME registration
+  # email {$EMAIL}
+}
+
+{$DOMAIN} {
+  reverse_proxy web:8000
+  encode gzip
+}

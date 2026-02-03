@@ -1,12 +1,17 @@
 {% extends "base.html" %}
 {% block content %}
-  <div class="panel">
-    <div class="row-between">
-      <div>
-        <h2 style="margin:0">Error</h2>
-        <div class="hint">{{ message }}</div>
+  <div class="auth">
+    <div class="card auth__card">
+      <div class="card__header">
+        <h1 class="card__title">エラー</h1>
+        <a class="btn btn--ghost btn--sm" href="/">戻る</a>
       </div>
-      <a class="btn" href="/">Back</a>
+      <div class="card__body">
+        <div class="row">
+          <span class="badge badge--bad">ERROR</span>
+          <span class="muted">{{ message }}</span>
+        </div>
+      </div>
     </div>
   </div>
 {% endblock %}

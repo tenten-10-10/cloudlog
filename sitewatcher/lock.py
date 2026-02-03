@@ -15,7 +15,12 @@ class FileLock:
         fp = self._path.open("a+")
         try:
             import fcntl  # type: ignore
+        except Exception:
+            # Best-effort fallback when fcntl is unavailable (e.g. Windows).
+            self._fp = fp
+            return True
 
+        try:
             fcntl.flock(fp.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
         except Exception:
             fp.close()
@@ -32,7 +37,10 @@ class FileLock:
         try:
             import fcntl  # type: ignore
 
-            fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+            try:
+                fcntl.flock(fp.fileno(), fcntl.LOCK_UN)
+            except Exception:
+                pass
         finally:
             fp.close()
 
@@ -51,4 +59,3 @@ def try_lock(path: Path) -> Optional[FileLock]:
     if lock.try_acquire():
         return lock
     return None
-

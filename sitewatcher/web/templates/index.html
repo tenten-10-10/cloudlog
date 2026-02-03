@@ -1,108 +1,174 @@
 {% extends "base.html" %}
 {% block content %}
-  <div class="panel">
-    <div class="row-between">
-      <div>
+  {% set enabled_targets = targets | selectattr("enabled") | list | length %}
+  {% set total_targets = targets | length %}
+
+  <div class="stack">
+    <div class="card">
+      <div class="card__header">
+        <div class="stack">
+          <h1 class="card__title">ダッシュボード</h1>
+          <div class="muted small">監視・通知の状態をまとめて確認できます。</div>
+        </div>
         <div class="row">
-          <div class="pill">Interval: <strong>{{ interval_seconds }}s</strong></div>
-          {% if scheduler_enabled %}
-            <div class="tag ok">Scheduler ON</div>
-          {% else %}
-            <div class="tag bad">Scheduler OFF</div>
-          {% endif %}
-          {% if notify_on_first %}
-            <div class="tag">Notify on first: ON</div>
-          {% else %}
-            <div class="tag">Notify on first: OFF</div>
-          {% endif %}
-        </div>
-        <div class="hint">
-          Enabled notifiers:
-          {% for n in notifiers %}
-            {% if n.enabled %}
-              <span class="tag">{{ n.name }}</span>
-            {% endif %}
-          {% endfor %}
+          <a class="btn btn--primary" href="/targets/new">＋監視を追加</a>
+          <a class="btn btn--ghost" href="/settings">設定</a>
         </div>
       </div>
-      <div class="pill">
-        Last run:
-        {% if last_run %}
-          <span class="tag {% if last_run.status == 'ok' %}ok{% elif last_run.status == 'error' %}bad{% endif %}">{{ last_run.status }}</span>
-          <span class="muted">{{ format_ts(last_run.started_at) }}</span>
-        {% else %}
-          <span class="muted">-</span>
-        {% endif %}
+      <div class="card__body">
+        <div class="stats">
+          <div class="stat">
+            <div class="stat__k">監視中</div>
+            <div class="stat__v">{{ enabled_targets }}件</div>
+            <div class="help">合計 {{ total_targets }}件</div>
+          </div>
+          <div class="stat">
+            <div class="stat__k">スケジューラ</div>
+            <div class="stat__v">{% if scheduler_enabled %}<span class="badge badge--ok">ON</span>{% else %}<span class="badge badge--bad">OFF</span>{% endif %}</div>
+            <div class="help">ユーザー設定で切替</div>
+          </div>
+          <div class="stat">
+            <div class="stat__k">実行間隔</div>
+            <div class="stat__v">{{ interval_seconds }}秒</div>
+            <div class="help">短すぎるとブロックされる可能性があります</div>
+          </div>
+          <div class="stat">
+            <div class="stat__k">最終実行</div>
+            <div class="stat__v">
+              {% if last_run %}
+                <span class="badge {% if last_run.status == 'ok' %}badge--ok{% elif last_run.status == 'error' %}badge--bad{% endif %}">{{ last_run.status }}</span>
+              {% else %}
+                <span class="badge">-</span>
+              {% endif %}
+            </div>
+            <div class="help">{% if last_run %}{{ format_ts(last_run.started_at) }}{% else %}-{% endif %}</div>
+          </div>
+        </div>
       </div>
     </div>
-  </div>
 
-  <div class="panel">
-    <div class="row-between">
-      <div>
-        <h2 style="margin:0">Targets</h2>
-        <div class="hint">UIで追加/編集して監視できます。</div>
+    <div class="card">
+      <div class="card__header">
+        <div class="stack">
+          <h2 class="card__title">監視一覧</h2>
+          <div class="muted small">表示中: <span class="mono" data-filter-count></span>件</div>
+        </div>
+        <div class="row">
+          <form class="row" action="/preview" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+            <input class="input" type="url" name="url" placeholder="URLを貼り付けて抽出プレビュー" />
+            <input type="hidden" name="type" value="html" />
+            <input type="hidden" name="extract" value="text" />
+            <button class="btn btn--ghost" type="submit">プレビュー</button>
+          </form>
+        </div>
       </div>
-      <a class="btn primary" href="/targets/new">+ Add</a>
-    </div>
+      <div class="card__body">
+        <div class="toolbar">
+          <div class="toolbar__left">
+            <div class="field">
+              <label>検索</label>
+              <input class="input" type="text" placeholder="名前/URL/通知先で検索" data-filter-input />
+            </div>
+            <div class="field">
+              <label>種類</label>
+              <select class="select" data-filter-type>
+                <option value="all">すべて</option>
+                <option value="html">HTML</option>
+                <option value="rss">RSS</option>
+              </select>
+            </div>
+            <div class="field">
+              <label>状態</label>
+              <select class="select" data-filter-enabled>
+                <option value="all">すべて</option>
+                <option value="on">ON</option>
+                <option value="off">OFF</option>
+              </select>
+            </div>
+          </div>
+          <div class="toolbar__right">
+            {% for n in notifiers %}
+              {% if n.enabled %}
+                <span class="badge">{{ n.name }}</span>
+              {% endif %}
+            {% endfor %}
+          </div>
+        </div>
 
-    <div style="margin-top:12px">
-      <table class="table">
-        <thead>
-          <tr>
-            <th>Enabled</th>
-            <th>Name</th>
-            <th>Type</th>
-            <th>URL / Selector</th>
-            <th>Notify</th>
-            <th>Checked</th>
-            <th>Changed</th>
-            <th>Actions</th>
-          </tr>
-        </thead>
-        <tbody>
+        <div class="empty" data-empty-state="no-targets" {% if targets %}hidden{% endif %}>
+          <p class="empty__title">まだ監視がありません</p>
+          <div class="empty__body">
+            右上の「＋監視を追加」から、監視したいURLと（HTMLの場合は）selectorを設定してください。
+          </div>
+        </div>
+
+        <div class="empty" data-empty-state="no-match" hidden>
+          <p class="empty__title">条件に一致する監視がありません</p>
+          <div class="empty__body">検索/種類/状態の条件を見直してください。</div>
+        </div>
+
+        <div class="targets">
           {% for t in targets %}
             {% set st = state_map.get(t.id) %}
-            <tr>
-              <td>
-                {% if t.enabled %}
-                  <span class="tag ok">ON</span>
-                {% else %}
-                  <span class="tag bad">OFF</span>
-                {% endif %}
-              </td>
-              <td><strong>{{ t.name }}</strong></td>
-              <td><span class="tag">{{ t.type }}</span></td>
-              <td>
-                <div><a href="{{ t.url }}" target="_blank" rel="noreferrer">{{ t.url }}</a></div>
-                {% if t.type == 'html' and t.selector %}
-                  <div class="muted" style="margin-top:6px">selector: <code>{{ t.selector }}</code></div>
-                {% endif %}
-              </td>
-              <td class="muted">
-                {% if t.notify %}
-                  {% for n in t.notify %}
-                    <span class="tag">{{ n }}</span>
-                  {% endfor %}
-                {% else %}
-                  -
-                {% endif %}
-              </td>
-              <td class="muted">{{ format_ts(st.checked_at if st else None) }}</td>
-              <td class="muted">{{ format_ts(st.changed_at if st else None) }}</td>
-              <td>
+            <div
+              class="card card--soft target"
+              data-filter-item
+              data-filter-text="{{ t.name }} {{ t.url }} {{ t.type }} {{ (t.selector or '') }} {{ (t.notify | join(' ')) }}"
+              data-type="{{ t.type }}"
+              data-enabled="{{ 'on' if t.enabled else 'off' }}"
+            >
+              <div class="target__head">
+                <div class="stack stack--tight">
+                  <div class="row">
+                    {% if t.enabled %}
+                      <span class="badge badge--ok">ON</span>
+                    {% else %}
+                      <span class="badge badge--bad">OFF</span>
+                    {% endif %}
+                    <a class="target__name" href="/targets/{{ t.id }}/edit">{{ t.name }}</a>
+                    <span class="badge badge--accent">{{ t.type | upper }}</span>
+                  </div>
+                  <div class="target__meta">
+                    {% if t.notify %}
+                      {% for n in t.notify %}
+                        <span class="badge">{{ n }}</span>
+                      {% endfor %}
+                    {% else %}
+                      <span class="badge">通知なし</span>
+                    {% endif %}
+                    {% if t.type == 'html' and t.selector %}
+                      <span class="badge"><span class="muted small">selector</span>&nbsp;<code>{{ t.selector }}</code></span>
+                    {% endif %}
+                  </div>
+                </div>
                 <div class="row">
-                  <a class="btn" href="/targets/{{ t.id }}/edit">Edit</a>
+                  <a class="btn btn--ghost btn--sm" href="/targets/{{ t.id }}/edit">編集</a>
                   <form method="post" action="/targets/{{ t.id }}/delete">
-                    <button class="btn danger" type="submit" data-confirm="Delete target '{{ t.name }}'?">Delete</button>
+                    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+                    <button class="btn btn--danger btn--sm" type="submit" data-confirm="「{{ t.name }}」を削除しますか？">削除</button>
                   </form>
                 </div>
-              </td>
-            </tr>
+              </div>
+
+              <div class="target__url">
+                <a href="{{ t.url }}" target="_blank" rel="noreferrer">{{ t.url }}</a>
+              </div>
+
+              <div class="target__times">
+                <div class="kv">
+                  <div class="kv__k">最終チェック</div>
+                  <div class="kv__v">{{ format_ts(st.checked_at if st else None) }}</div>
+                </div>
+                <div class="kv">
+                  <div class="kv__k">最終変更</div>
+                  <div class="kv__v">{{ format_ts(st.changed_at if st else None) }}</div>
+                </div>
+              </div>
+            </div>
           {% endfor %}
-        </tbody>
-      </table>
+        </div>
+      </div>
     </div>
   </div>
 {% endblock %}
-

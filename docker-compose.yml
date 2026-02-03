@@ -1,0 +1,57 @@
+services:
+  web:
+    build: .
+    restart: unless-stopped
+    environment:
+      SITEWATCHER_DATA_DIR: /data
+      SITEWATCHER_WEB_SCHEDULER: "0"
+      SITEWATCHER_HTTPS_ONLY: "${SITEWATCHER_HTTPS_ONLY:-1}"
+      # Allow public sign-ups (set 0 for invite-only)
+      SITEWATCHER_ALLOW_REGISTRATION: "${SITEWATCHER_ALLOW_REGISTRATION:-1}"
+      # Set your domain here (comma-separated if multiple)
+      SITEWATCHER_ALLOWED_HOSTS: "${SITEWATCHER_ALLOWED_HOSTS:?set in .env}"
+      # Required for stable sessions
+      SITEWATCHER_SECRET_KEY: "${SITEWATCHER_SECRET_KEY:?set in .env}"
+      SITEWATCHER_ADMIN_USER: "${SITEWATCHER_ADMIN_USER:-admin}"
+      # Generate with: python3 -m sitewatcher hash-password
+      SITEWATCHER_ADMIN_PASSWORD_HASH: "${SITEWATCHER_ADMIN_PASSWORD_HASH:?set in .env}"
+      # Security: block localhost/private IPs by default
+      SITEWATCHER_ALLOW_PRIVATE_NETWORK: "${SITEWATCHER_ALLOW_PRIVATE_NETWORK:-0}"
+    volumes:
+      - ./.sitewatcher:/data
+    expose:
+      - "8000"
+
+  worker:
+    build: .
+    restart: unless-stopped
+    command: ["python", "-m", "sitewatcher", "worker", "--data-dir", "/data"]
+    environment:
+      SITEWATCHER_DATA_DIR: /data
+      SITEWATCHER_HTTPS_ONLY: "${SITEWATCHER_HTTPS_ONLY:-1}"
+      SITEWATCHER_ADMIN_USER: "${SITEWATCHER_ADMIN_USER:-admin}"
+      SITEWATCHER_ADMIN_PASSWORD_HASH: "${SITEWATCHER_ADMIN_PASSWORD_HASH:?set in .env}"
+      SITEWATCHER_ALLOW_PRIVATE_NETWORK: "${SITEWATCHER_ALLOW_PRIVATE_NETWORK:-0}"
+    volumes:
+      - ./.sitewatcher:/data
+
+  caddy:
+    image: caddy:2
+    restart: unless-stopped
+    depends_on:
+      - web
+    environment:
+      DOMAIN: "${DOMAIN:?set in .env}"
+      # Optional, but recommended for ACME registration
+      EMAIL: "${EMAIL:-}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data
+      - caddy_config:/config
+
+volumes:
+  caddy_data:
+  caddy_config:
