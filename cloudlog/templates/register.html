@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel narrow">
+  <h1>新規登録</h1>
+  {% if error %}<p class="error">{{ error }}</p>{% endif %}
+  <form method="post" action="/register" class="form-grid">
+    <label>ユーザー名
+      <input type="text" name="username" minlength="3" required />
+    </label>
+    <label>パスワード
+      <input type="password" name="password" minlength="8" required />
+    </label>
+    <button class="btn" type="submit">登録する</button>
+  </form>
+</section>
+{% endblock %}

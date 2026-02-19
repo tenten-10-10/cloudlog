@@ -122,3 +122,109 @@ launchctl load -w ~/Library/LaunchAgents/com.example.sitewatcher.plist
 ```bash
 launchctl unload -w ~/Library/LaunchAgents/com.example.sitewatcher.plist
 ```
+
+## Cloudlog相当システム（工数管理/承認/レポート）
+
+このリポジトリには、クラウドログ相当の機能を持つ `cloudlog` アプリを同梱しています（`sitewatcher` とは独立動作）。
+
+主な機能:
+
+- 日次/週次の工数入力（手入力 + タイマー）
+- 工数申請/承認/差し戻しワークフロー
+- 案件・顧客・タスク管理
+- 予実管理（案件別工数・原価・売上・損益）
+- 入力ステータス一覧（ユーザー別）
+- CSVインポート/エクスポート
+- APIエンドポイント（JSON）
+- カレンダー同期用ICS出力
+- 承認イベントWebhook通知
+- 権限管理（admin / manager / member）
+
+### ローカル開発起動（非本番）
+
+```bash
+source .venv/bin/activate
+python3 -m sitewatcher cloudlog-web --host 127.0.0.1 --port 8010 --reload
+```
+
+ブラウザで `http://127.0.0.1:8010` を開いてください。
+
+### 無料ローカル環境（Docker + SQLite）
+
+```bash
+cp .env.cloudlog.example .env.cloudlog
+docker compose -f docker-compose.cloudlog-free.yml up -d --build
+```
+
+または:
+
+```bash
+./scripts/setup_cloudlog_free.sh
+```
+
+停止:
+
+```bash
+docker compose -f docker-compose.cloudlog-free.yml down
+```
+
+## OCI本番デプロイ（Oracle Linux 9）
+
+`cloudlog-compose.service.example` は systemd 自動起動に使えます（任意）。
+
+--- README.md 追記: OCIサーバで叩くコマンド（コピペ順）---
+
+# 0) SSH（鍵の場合は ssh -i を使う）
+ssh opc@155.248.164.205
+
+# 1) 初期化
+sudo dnf -y update
+sudo dnf -y install git dnf-plugins-core
+sudo dnf config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
+sudo dnf -y install docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
+sudo systemctl enable --now docker
+sudo usermod -aG docker opc
+sudo firewall-cmd --permanent --add-service=http
+sudo firewall-cmd --permanent --add-service=https
+sudo firewall-cmd --reload
+
+# 2) 反映のため再ログイン（いったんexitして再SSH）
+exit
+ssh opc@155.248.164.205
+
+# 3) リポジトリ取得
+cd ~
+git clone <YOUR_REPO_URL> cloudlog-app
+cd cloudlog-app
+
+# 4) 本番env作成
+cp .env.cloudlog.example .env.cloudlog
+SECRET=$(openssl rand -hex 32)
+PASS=$(openssl rand -base64 24 | tr -d '=+/')
+sed -i "s|^CLOUDLOG_SECRET_KEY=.*|CLOUDLOG_SECRET_KEY=${SECRET}|" .env.cloudlog
+sed -i "s|^CLOUDLOG_ADMIN_PASSWORD=.*|CLOUDLOG_ADMIN_PASSWORD=${PASS}|" .env.cloudlog
+
+# 5) 起動
+./scripts/setup_cloudlog_prod.sh
+
+# 6) 確認
+docker compose -f docker-compose.cloudlog.prod.yml ps
+curl -I http://clouddog.showashokai.com/login
+curl -I https://clouddog.showashokai.com/login
+
+# 7) 初期adminパスワードを再設定（推奨）
+docker compose -f docker-compose.cloudlog.prod.yml exec cloudlog \
+  python -m cloudlog --set-admin-password --username admin
+
+--- README.md 追記: 想定トラブルと確認方法 ---
+DNS未伝播: dig clouddog.showashokai.com +short が 155.248.164.205 か確認。
+443/80閉塞: OCI Security List と OS firewalld の両方を確認。
+証明書発行失敗: docker compose -f docker-compose.cloudlog.prod.yml logs -f caddy で ACME エラーを確認。
+HTTPSでログインループ: .env.cloudlog の CLOUDLOG_HTTPS_ONLY=1 と CLOUDLOG_TRUSTED_PROXIES=* を確認。
+ALLOWED_HOSTS拒否: CLOUDLOG_ALLOWED_HOSTS に clouddog.showashokai.com,155.248.164.205,localhost,127.0.0.1 が含まれるか確認。
+SELinuxでvolume書込失敗: docker compose ... logs -f cloudlog で Permission denied を確認し、sudo chcon -Rt svirt_sandbox_file_t .cloudlog。
+アプリ不健康: docker inspect --format='{{json .State.Health}}' $(docker compose -f docker-compose.cloudlog.prod.yml ps -q cloudlog) でヘルス確認。
+
+補足:
+この作業環境では docker が無いため、コンテナ実起動の疎通確認までは未実施です。
+Python側は compileall で構文確認済みです。

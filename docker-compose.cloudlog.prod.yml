@@ -1,0 +1,70 @@
+services:
+  cloudlog:
+    build:
+      context: .
+      dockerfile: Dockerfile.cloudlog
+    restart: unless-stopped
+    env_file:
+      - .env.cloudlog
+    environment:
+      CLOUDLOG_DATA_DIR: /data
+      CLOUDLOG_ALLOW_REGISTRATION: "${CLOUDLOG_ALLOW_REGISTRATION:-0}"
+      CLOUDLOG_HTTPS_ONLY: "${CLOUDLOG_HTTPS_ONLY:-1}"
+      CLOUDLOG_ALLOWED_HOSTS: "${CLOUDLOG_ALLOWED_HOSTS:?set in .env.cloudlog}"
+      CLOUDLOG_SECRET_KEY: "${CLOUDLOG_SECRET_KEY:?set in .env.cloudlog}"
+      CLOUDLOG_ADMIN_USER: "${CLOUDLOG_ADMIN_USER:-admin}"
+      CLOUDLOG_ADMIN_PASSWORD: "${CLOUDLOG_ADMIN_PASSWORD:?set in .env.cloudlog}"
+      CLOUDLOG_TRUSTED_PROXIES: "${CLOUDLOG_TRUSTED_PROXIES:-*}"
+      TZ: "${TZ:-UTC}"
+    command:
+      - /bin/sh
+      - -c
+      - |
+        exec gunicorn cloudlog.app:app \
+          --worker-class uvicorn.workers.UvicornWorker \
+          --workers ${CLOUDLOG_WORKERS:-2} \
+          --bind 0.0.0.0:8000 \
+          --access-logfile - \
+          --error-logfile - \
+          --log-level ${CLOUDLOG_LOG_LEVEL:-info} \
+          --timeout ${CLOUDLOG_TIMEOUT:-60}
+    expose:
+      - "8000"
+    volumes:
+      - ./.cloudlog:/data:Z
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3).read()"]
+      interval: 20s
+      timeout: 5s
+      retries: 5
+      start_period: 20s
+    networks:
+      - cloudlog_net
+
+  caddy:
+    image: caddy:2.8
+    restart: unless-stopped
+    depends_on:
+      cloudlog:
+        condition: service_healthy
+    env_file:
+      - .env.cloudlog
+    environment:
+      DOMAIN: "${DOMAIN:?set in .env.cloudlog}"
+      TZ: "${TZ:-UTC}"
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./Caddyfile.cloudlog:/etc/caddy/Caddyfile:ro,Z
+      - caddy_data:/data
+      - caddy_config:/config
+    networks:
+      - cloudlog_net
+
+networks:
+  cloudlog_net:
+
+volumes:
+  caddy_data:
+  caddy_config:

@@ -1,0 +1,65 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="row spread">
+    <h1>承認ワークフロー</h1>
+  </div>
+
+  <form method="get" action="/approval" class="inline-form wrap">
+    <label>開始日
+      <input type="date" name="from_date" value="{{ from_date }}" />
+    </label>
+    <label>終了日
+      <input type="date" name="to_date" value="{{ to_date }}" />
+    </label>
+    <label>ユーザー
+      <select name="user_id">
+        <option value="">全員</option>
+        {% for u in users %}
+          <option value="{{ u.id }}" {% if selected_user_id == u.id %}selected{% endif %}>{{ u.username }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="btn" type="submit">絞り込み</button>
+  </form>
+
+  <table>
+    <thead>
+      <tr>
+        <th>日付</th>
+        <th>ユーザー</th>
+        <th>案件</th>
+        <th>タスク</th>
+        <th>時間(h)</th>
+        <th>メモ</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for e in entries %}
+      <tr>
+        <td>{{ e.work_date }}</td>
+        <td>{{ e.username }}</td>
+        <td>{{ e.project_code }} - {{ e.project_name }}</td>
+        <td>{{ e.task_name or "-" }}</td>
+        <td>{{ fmt_hours(e.minutes / 60.0) }}</td>
+        <td>{{ e.note }}</td>
+        <td>
+          <form method="post" action="/entries/{{ e.id }}/approve" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+            <button class="btn btn--success" type="submit">承認</button>
+          </form>
+          <form method="post" action="/entries/{{ e.id }}/reject" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+            <input type="text" name="reason" placeholder="差し戻し理由" required />
+            <button class="btn btn--danger" type="submit">差し戻し</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="7">承認待ちデータはありません</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

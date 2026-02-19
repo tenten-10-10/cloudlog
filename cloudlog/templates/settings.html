@@ -1,0 +1,24 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>連携設定</h1>
+  <form method="post" action="/settings/webhook" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    <label>Webhook URL（承認/差し戻し時に通知）
+      <input type="url" name="webhook_url" value="{{ webhook_url }}" placeholder="https://example.com/webhook" />
+    </label>
+    <button class="btn" type="submit">保存</button>
+  </form>
+
+  <section class="panel inset">
+    <h2>APIエンドポイント</h2>
+    <ul>
+      <li><code>GET /api/v1/projects</code></li>
+      <li><code>GET /api/v1/entries?from_date=YYYY-MM-DD&to_date=YYYY-MM-DD</code></li>
+      <li><code>POST /api/v1/entries</code></li>
+      <li><code>GET /api/v1/reports/summary?from_date=YYYY-MM-DD&to_date=YYYY-MM-DD</code></li>
+      <li><code>GET /api/v1/status?from_date=YYYY-MM-DD&to_date=YYYY-MM-DD</code></li>
+    </ul>
+  </section>
+</section>
+{% endblock %}

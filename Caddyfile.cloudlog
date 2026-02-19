@@ -1,0 +1,20 @@
+{
+  servers {
+    trusted_proxies static private_ranges
+  }
+}
+
+http://{$DOMAIN} {
+  redir https://{$DOMAIN}{uri} permanent
+}
+
+{$DOMAIN} {
+  encode zstd gzip
+
+  reverse_proxy cloudlog:8000
+
+  log {
+    output stdout
+    format console
+  }
+}

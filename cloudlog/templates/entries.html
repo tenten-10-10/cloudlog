@@ -1,0 +1,206 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="row spread">
+    <h1>工数入力</h1>
+    <div class="row">
+      <a class="btn btn--ghost" href="/calendar.ics">カレンダー同期用ICS</a>
+      <a class="btn btn--ghost" href="/export/entries.csv?from_date={{ week_start }}&to_date={{ week_end }}{% if target_user_id %}&user_id={{ target_user_id }}{% endif %}">CSV出力</a>
+    </div>
+  </div>
+
+  <form method="get" action="/entries" class="inline-form wrap">
+    <label>週開始日
+      <input type="date" name="week_start" value="{{ week_start }}" />
+    </label>
+    {% if users %}
+    <label>対象ユーザー
+      <select name="user_id">
+        {% for u in users %}
+          <option value="{{ u.id }}" {% if u.id == target_user_id %}selected{% endif %}>{{ u.username }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    {% endif %}
+    <button class="btn" type="submit">表示</button>
+  </form>
+
+  <p class="hint">対象期間: {{ week_start }} 〜 {{ week_end }} / 合計 {{ fmt_hours(total_hours) }}h</p>
+
+  <form method="post" action="/entries" class="form-grid cols-6">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    <input type="hidden" name="week_start" value="{{ week_start }}" />
+    {% if users %}<input type="hidden" name="user_id" value="{{ target_user_id }}" />{% endif %}
+    <label>日付
+      <input type="date" name="work_date" value="{{ week_start }}" required />
+    </label>
+    <label>案件
+      <select name="project_id" data-task-parent required>
+        <option value="">選択</option>
+        {% for p in projects %}
+          <option value="{{ p.id }}">{{ p.code }} - {{ p.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>タスク
+      <select name="task_id" data-task-child>
+        <option value="">なし</option>
+        {% for t in tasks %}
+          <option value="{{ t.id }}" data-project="{{ t.project_id }}">{{ t.project_code }} / {{ t.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>時間(h)
+      <input type="number" name="hours" min="0.1" step="0.1" required />
+    </label>
+    <label>メモ
+      <input type="text" name="note" maxlength="500" />
+    </label>
+    <button class="btn" type="submit">追加</button>
+  </form>
+
+  <div class="row wrap">
+    <form method="post" action="/entries/submit" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <input type="hidden" name="from_date" value="{{ week_start }}" />
+      <input type="hidden" name="to_date" value="{{ week_end }}" />
+      {% if users %}<input type="hidden" name="user_id" value="{{ target_user_id }}" />{% endif %}
+      <button class="btn btn--success" type="submit">この週を申請</button>
+    </form>
+
+    <form method="post" action="/entries/copy" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      {% if users %}<input type="hidden" name="user_id" value="{{ target_user_id }}" />{% endif %}
+      <label>コピー元
+        <input type="date" name="source_date" required />
+      </label>
+      <label>コピー先
+        <input type="date" name="target_date" required />
+      </label>
+      <button class="btn" type="submit">前日コピー</button>
+    </form>
+  </div>
+</section>
+
+{% if not users or (current_user and current_user.id == target_user_id) %}
+<section class="panel">
+  <h2>タイマー入力</h2>
+  {% if timer %}
+    <p class="notice">稼働中: {{ timer_minutes }} 分（案件ID: {{ timer.project_id }}）</p>
+    <form method="post" action="/timer/stop" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <button class="btn btn--danger" type="submit">停止して記録</button>
+    </form>
+  {% else %}
+    <form method="post" action="/timer/start" class="form-grid cols-4">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <label>案件
+        <select name="project_id" data-task-parent required>
+          <option value="">選択</option>
+          {% for p in projects %}
+            <option value="{{ p.id }}">{{ p.code }} - {{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>タスク
+        <select name="task_id" data-task-child>
+          <option value="">なし</option>
+          {% for t in tasks %}
+            <option value="{{ t.id }}" data-project="{{ t.project_id }}">{{ t.project_code }} / {{ t.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>メモ
+        <input type="text" name="note" maxlength="500" />
+      </label>
+      <button class="btn" type="submit">タイマー開始</button>
+    </form>
+  {% endif %}
+</section>
+{% endif %}
+
+<section class="panel">
+  <h2>週間入力一覧</h2>
+  {% for d in days %}
+    <h3>{{ d.isoformat() }}</h3>
+    <table>
+      <thead>
+        <tr>
+          <th>ユーザー</th>
+          <th>案件</th>
+          <th>タスク</th>
+          <th>時間(h)</th>
+          <th>状態</th>
+          <th>メモ</th>
+          <th>操作</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for e in by_date.get(d.isoformat(), []) %}
+        <tr>
+          <td>{{ e.username }}</td>
+          <td>{{ e.project_code }} - {{ e.project_name }}</td>
+          <td>{{ e.task_name or "-" }}</td>
+          <td>{{ fmt_hours(e.minutes / 60.0) }}</td>
+          <td><span class="status status--{{ e.status }}">{{ e.status }}</span></td>
+          <td>{{ e.note }}</td>
+          <td>
+            {% if e.status != "approved" %}
+            <details>
+              <summary>編集</summary>
+              <form method="post" action="/entries/{{ e.id }}/update" class="form-grid compact">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+                <label>日付
+                  <input type="date" name="work_date" value="{{ e.work_date }}" required />
+                </label>
+                <label>時間
+                  <input type="number" name="hours" min="0.1" step="0.1" value="{{ '%.2f' % (e.minutes / 60.0) }}" required />
+                </label>
+                <label>案件
+                  <select name="project_id" required>
+                    {% for p in projects %}
+                    <option value="{{ p.id }}" {% if p.id == e.project_id %}selected{% endif %}>{{ p.code }} - {{ p.name }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label>タスク
+                  <select name="task_id">
+                    <option value="">なし</option>
+                    {% for t in tasks %}
+                    <option value="{{ t.id }}" {% if e.task_id == t.id %}selected{% endif %}>{{ t.project_code }} / {{ t.name }}</option>
+                    {% endfor %}
+                  </select>
+                </label>
+                <label>メモ
+                  <input type="text" name="note" value="{{ e.note }}" />
+                </label>
+                <button class="btn" type="submit">更新</button>
+              </form>
+              <form method="post" action="/entries/{{ e.id }}/delete" class="inline-form">
+                <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+                <button class="btn btn--danger" type="submit">削除</button>
+              </form>
+            </details>
+            {% endif %}
+            {% if e.status == "rejected" and e.reject_reason %}
+              <p class="error">差し戻し理由: {{ e.reject_reason }}</p>
+            {% endif %}
+          </td>
+        </tr>
+      {% else %}
+        <tr><td colspan="7">入力なし</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  {% endfor %}
+</section>
+
+<section class="panel">
+  <h2>CSV取り込み</h2>
+  <form method="post" action="/import/entries.csv" enctype="multipart/form-data" class="inline-form">
+    <input type="file" name="file" accept=".csv" required />
+    <button class="btn" type="submit">取り込み</button>
+  </form>
+  <p class="hint">ヘッダ: date,project_code(or project),task,hours,note,status,username(管理者のみ)</p>
+</section>
+{% endblock %}

@@ -1,0 +1,62 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>ユーザー管理</h1>
+  <form method="post" action="/users/new" class="form-grid cols-5">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    <label>ユーザー名
+      <input type="text" name="username" minlength="3" required />
+    </label>
+    <label>初期パスワード
+      <input type="text" name="password" minlength="8" required />
+    </label>
+    <label>ロール
+      <select name="role">
+        <option value="member">member</option>
+        <option value="manager">manager</option>
+        <option value="admin">admin</option>
+      </select>
+    </label>
+    <label>時間単価(円/h)
+      <input type="number" name="hourly_cost" min="0" step="100" value="0" />
+    </label>
+    <button class="btn" type="submit">追加</button>
+  </form>
+
+  <table>
+    <thead>
+      <tr>
+        <th>ID</th>
+        <th>ユーザー名</th>
+        <th>ロール</th>
+        <th>時間単価</th>
+        <th>更新</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>{{ u.id }}</td>
+        <td>{{ u.username }}</td>
+        <td>
+          <form method="post" action="/users/{{ u.id }}/update" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+            <select name="role">
+              <option value="member" {% if u.role == "member" %}selected{% endif %}>member</option>
+              <option value="manager" {% if u.role == "manager" %}selected{% endif %}>manager</option>
+              <option value="admin" {% if u.role == "admin" %}selected{% endif %}>admin</option>
+            </select>
+        </td>
+        <td>
+            <input type="number" name="hourly_cost" min="0" step="100" value="{{ '%.0f' % u.hourly_cost }}" />
+        </td>
+        <td>
+            <button class="btn" type="submit">反映</button>
+          </form>
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

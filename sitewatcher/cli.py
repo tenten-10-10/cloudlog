@@ -31,6 +31,12 @@ def _build_parser() -> argparse.ArgumentParser:
     web.add_argument("--reload", action="store_true")
     web.add_argument("--data-dir", type=Path, default=Path(".sitewatcher"))
 
+    cloudlog = sub.add_parser("cloudlog-web", help="Run the Cloudlog-like web system")
+    cloudlog.add_argument("--host", default="127.0.0.1")
+    cloudlog.add_argument("--port", type=int, default=8010)
+    cloudlog.add_argument("--reload", action="store_true")
+    cloudlog.add_argument("--data-dir", type=Path, default=Path(".cloudlog"))
+
     worker = sub.add_parser("worker", help="Run background scheduler (recommended for production)")
     worker.add_argument("--data-dir", type=Path, default=Path(".sitewatcher"))
     worker.add_argument("--once", action="store_true")
@@ -80,6 +86,16 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "worker":
         os.environ["SITEWATCHER_DATA_DIR"] = str(args.data_dir)
         worker_loop(once=bool(args.once))
+        return 0
+
+    if args.command == "cloudlog-web":
+        os.environ["CLOUDLOG_DATA_DIR"] = str(args.data_dir)
+        try:
+            import uvicorn  # type: ignore
+        except Exception:
+            logging.error("uvicorn is not installed. Install dependencies: pip install -r requirements.txt")
+            return 1
+        uvicorn.run("cloudlog.app:app", host=args.host, port=int(args.port), reload=bool(args.reload))
         return 0
 
     if args.command == "hash-password":

@@ -22,11 +22,22 @@ import tty
 import unicodedata
 import urllib.parse
 import urllib.request
+import urllib.error
 from collections import OrderedDict
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
 from playwright.sync_api import sync_playwright
+
+BASE_DIR = Path(__file__).resolve().parent
+
+try:
+    from dotenv import load_dotenv
+
+    # .env を自動読込（スクリプトと同じフォルダ優先）
+    load_dotenv(dotenv_path=str(BASE_DIR / ".env"))
+except Exception:
+    pass
 
 
 # ===== Telegram通知（任意）=====
@@ -62,6 +73,98 @@ def tg_send(text: str) -> bool:
         return False
 
 
+# ===== Google Apps Script（スプレッドシート記録）=====
+GAS_WEBAPP_URL = os.getenv(
+    "VINE_GAS_URL",
+    "https://script.google.com/macros/s/AKfycbzlRl7HB8tjzEB5RvdDv-jvez-d-U1HgfI0BLQPHMwmsqsghgbnzXGR08KDC8L4IGDk/exec",
+).strip()
+GAS_SECRET = os.getenv("VINE_GAS_SECRET", "potluck_secret_123").strip()
+GAS_DISABLE = os.getenv("VINE_GAS_DISABLE", "").strip() != ""
+GAS_METHOD = os.getenv("VINE_GAS_METHOD", "auto").strip().lower()  # post | get | auto
+try:
+    GAS_TIMEOUT = float(os.getenv("VINE_GAS_TIMEOUT", "8"))
+except Exception:
+    GAS_TIMEOUT = 8.0
+
+
+def _read_json_response_bytes(raw: bytes) -> Optional[dict]:
+    try:
+        return json.loads(raw.decode("utf-8"))
+    except Exception:
+        try:
+            return json.loads(raw.decode("utf-8", "ignore"))
+        except Exception:
+            return None
+
+
+def gas_append_row(payload: dict) -> Optional[dict]:
+    """GAS Webアプリへ追記（POST優先、失敗時はGETへフォールバック）。戻り値は JSON dict or None。"""
+    if GAS_DISABLE or (not GAS_WEBAPP_URL):
+        return None
+
+    data = dict(payload or {})
+    data.setdefault("secret", GAS_SECRET)
+
+    def _post_json() -> Optional[dict]:
+        body = json.dumps(data, ensure_ascii=False).encode("utf-8")
+        req = urllib.request.Request(
+            GAS_WEBAPP_URL,
+            data=body,
+            headers={
+                "Content-Type": "application/json; charset=utf-8",
+                "User-Agent": "vine-watcher/1.0",
+            },
+            method="POST",
+        )
+        try:
+            # Apps Script は 302 で echo URL へ飛ぶが、POST を維持すると 405 になることがある。
+            # urllib の標準リダイレクトは 302/303 で GET に変換して追従するため、それに任せる。
+            with urllib.request.urlopen(req, timeout=GAS_TIMEOUT) as r:
+                raw = r.read()
+            return _read_json_response_bytes(raw)
+        except urllib.error.HTTPError as e:
+            try:
+                raw = e.read() or b""
+            except Exception:
+                raw = b""
+            return _read_json_response_bytes(raw)
+        except Exception:
+            return None
+
+    def _get_query() -> Optional[dict]:
+        try:
+            qs = urllib.parse.urlencode(data)
+        except Exception:
+            return None
+        url = GAS_WEBAPP_URL + ("&" if "?" in GAS_WEBAPP_URL else "?") + qs
+        req = urllib.request.Request(url, headers={"User-Agent": "vine-watcher/1.0"}, method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=GAS_TIMEOUT) as r:
+                raw = r.read()
+            return _read_json_response_bytes(raw)
+        except urllib.error.HTTPError as e:
+            try:
+                raw = e.read() or b""
+            except Exception:
+                raw = b""
+            return _read_json_response_bytes(raw)
+        except Exception:
+            return None
+
+    method = (GAS_METHOD or "post").lower()
+    if method in ("post", "auto"):
+        res = _post_json()
+        if isinstance(res, dict):
+            return res
+        if method == "post":
+            return None
+    if method in ("get", "auto"):
+        res = _get_query()
+        if isinstance(res, dict):
+            return res
+    return None
+
+
 # ===== ANSI & Emoji =====
 COLOR_ENABLED = (
     (os.environ.get("VINE_COLOR", "1").lower() in ("1", "true", "yes"))
@@ -75,12 +178,28 @@ def _ansi(s: str, code: str) -> str:
     return f"\033[{code}m{s}\033[0m" if COLOR_ENABLED else s
 
 
+def _ansi_keep(s: str, start_code: str, end_code: str) -> str:
+    """ANSI を一時的に適用して、属性全体をリセットせずに戻す（太字などを維持したい場合用）"""
+    if not COLOR_ENABLED:
+        return s
+    return f"\033[{start_code}m{s}\033[{end_code}m"
+
+
 def B(s: str) -> str:
     return _ansi(s, "1")
 
 
 def C(s: str) -> str:
     return _ansi(s, "36")
+
+
+def Y(s: str) -> str:
+    return _ansi(s, "33")
+
+
+def Cbg(s: str) -> str:
+    """黒文字＋シアン背景（新着の時刻など強調用）"""
+    return _ansi(s, "1;30;46")
 
 
 def Gc(s: str) -> str:
@@ -103,6 +222,10 @@ def Cb(s: str) -> str:
     return _ansi(s, "1;36")
 
 
+def Yb(s: str) -> str:
+    return _ansi(s, "1;33")
+
+
 def Gb(s: str) -> str:
     return _ansi(s, "1;32")
 
@@ -123,14 +246,14 @@ FAST_WINDOWS = os.environ.get(
     "VINE_FAST_WINDOWS",
     "07:55-08:10,12:55-13:10,14:40-15:10,15:40-16:10,16:40-17:10,19:55-20:10",
 ).strip()
-SHOTS_DIR = os.environ.get("VINE_SHOT_DIR", "shots")
-DB_PATH = os.environ.get("VINE_CAPTURE_DB", "captured_asins.json")
+SHOTS_DIR = (os.environ.get("VINE_SHOT_DIR") or str(BASE_DIR / "shots")).strip()
+DB_PATH = (os.environ.get("VINE_CAPTURE_DB") or str(BASE_DIR / "captured_asins.json")).strip()
 ONLY_NEW = os.environ.get("VINE_ONLY_NEW", "1").lower() in ("1", "true", "yes")
 AUTO_ORDER = os.environ.get("VINE_AUTO_ORDER", "0").lower() in ("1", "true", "yes")
 ORDER_THRESHOLD = int(os.environ.get("VINE_ORDER_THRESHOLD", "14000"))
 PROFILE_DIR = os.environ.get("VINE_PROFILE_DIR", os.path.expanduser("~/vine-pw-profile"))
 DP_OPEN_MODE = os.environ.get("VINE_DP_OPEN_MODE", "tab").strip().lower()  # "tab" | "same"
-TAB_FOREGROUND = os.environ.get("VINE_TAB_FOREGROUND", "1").lower() in ("1", "true", "yes")
+TAB_FOREGROUND = os.environ.get("VINE_TAB_FOREGROUND", "0").lower() in ("1", "true", "yes")
 BOOT_CATCHUP = os.environ.get("VINE_BOOT_CATCHUP", "1").lower() in ("1", "true", "yes")
 NO_BOOT_DEEP = os.environ.get("VINE_NO_BOOT_DEEP", "0").lower() in ("1", "true", "yes")
 DEBUG_FIND = os.environ.get("VINE_DEBUG_FIND", "0").lower() in ("1", "true", "yes")
@@ -146,11 +269,8 @@ COLOR_PREF = ["緑", "green", "グリーン", "white", "ホワイト", "黒", "�
 
 
 # ---- ブランド設定（外部ファイル連携） ----
-# 環境変数 VINE_BRANDS_FILE があれば優先。未設定なら iCloud のブリッジボックス配下に保存。
-BRANDS_FILE = os.getenv(
-    "VINE_BRANDS_FILE",
-    os.path.expanduser("~/Library/Mobile Documents/com~apple~CloudDocs/ブリッジボックス/brands.txt"),
-)
+# 環境変数 VINE_BRANDS_FILE があれば優先。未設定なら「このスクリプトと同じフォルダ」に保存。
+BRANDS_FILE = os.getenv("VINE_BRANDS_FILE", str(BASE_DIR / "brands.txt"))
 
 
 def _read_brands_file(path: str) -> Optional[List[str]]:
@@ -291,6 +411,32 @@ def uniq_keep_order(seq):
     return list(seen.keys())
 
 
+def _vine_queue_label(url: str) -> str:
+    """通知ヘッダ用のキュー名（例: queue=potluck -> pot-luck）"""
+    try:
+        q = (urllib.parse.parse_qs(urllib.parse.urlparse(url).query).get("queue", [""])[0] or "").strip()
+        if q == "potluck":
+            return "pot-luck"
+        return q or "vine"
+    except Exception:
+        return "vine"
+
+
+def _fmt_tg_item_event(event: str, *, asin: str, title: str, price_text: str, dp_url: str, vine_url: str) -> str:
+    ts = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    queue_label = _vine_queue_label(vine_url)
+    return "\n".join(
+        [
+            f"【{queue_label}】[{ts}] {event}",
+            (title or "No Title").strip() or "No Title",
+            (price_text or "価格不明").strip() or "価格不明",
+            f"ASIN: {asin}",
+            dp_url,
+            vine_url,
+        ]
+    )
+
+
 def parse_hhmm(s: str) -> int:
     h, m = s.split(":")
     h = int(h)
@@ -329,7 +475,13 @@ def highlight_brands(title: str, brands) -> str:
     t = title or ""
     for b in sorted({str(x).strip() for x in brands if x}, key=len, reverse=True):
         try:
-            t = re.sub(re.escape(b), lambda m: M(m.group(0)), t, flags=re.IGNORECASE)
+            # 途中で \033[0m リセットすると外側の装飾（太字など）が切れるため、前景色だけ戻す
+            t = re.sub(
+                re.escape(b),
+                lambda m: _ansi_keep(m.group(0), "35", "39"),
+                t,
+                flags=re.IGNORECASE,
+            )
         except Exception:
             pass
     return t
@@ -369,13 +521,14 @@ def color_log_line(dt_iso: str, title: str, price_text: str, threshold: int, bra
         dt = datetime.datetime.now()
 
     ts = dt.strftime("%Y-%m-%d %H:%M:%S")
-    head = f"[{ts}]"
+    # NOTE: 商品行（新着ログ）の時刻は背景色つきで強調する
+    head = Cbg(f"[{ts}]")
 
     # --- 本文パーツ（空要素は連結しない） ---
     t = highlight_brands((title or "No Title").strip(), brands or [])
     body_parts = []
     if t:
-        body_parts.append(f"『{t}』")
+        body_parts.append(f"『{B(t)}』")
     body_parts.append(fmt_price(price_text, threshold))
 
     body = "、".join([p for p in body_parts if p])
@@ -389,8 +542,8 @@ def _now_ts() -> str:
 
 
 def _tag_time() -> str:
-    """色付きの時刻タグ（例: [2025-01-23 12:34:56] をシアン太字）"""
-    return Cb(f"[{_now_ts()}]")
+    """時刻タグ（他ログは時刻に色を付けない）"""
+    return f"[{_now_ts()}]"
 
 
 def _tag(stage: str, color_fn=None) -> str:
@@ -400,8 +553,8 @@ def _tag(stage: str, color_fn=None) -> str:
 
 
 def log_info(msg: str) -> None:
-    """通常情報ログ（青系）"""
-    print(f"{_tag_time()} {C(str(msg))}", flush=True)
+    """通常情報ログ（黄系）"""
+    print(f"{_tag_time()} {Y(str(msg))}", flush=True)
 
 
 def log_ok(msg: str) -> None:
@@ -421,7 +574,7 @@ def log_err(msg: str) -> None:
 
 def log_stage(stage: str, msg: str = "") -> None:
     """処理ステージ表示。例: [CTA押下] xxx"""
-    tag = _tag(stage, color_fn=Cb)
+    tag = _tag(stage, color_fn=Yb)
     body = f" {msg}" if msg else ""
     print(f"{_tag_time()} {tag}{body}", flush=True)
 
@@ -442,7 +595,7 @@ def log_scan_summary_jp(prefix: str, total: int, newp: int, existp: int, shots: 
     elif errs > 0:
         print(f"{_tag_time()} {Rb(line)}", flush=True)
     else:
-        print(f"{_tag_time()} {C(line)}", flush=True)
+        print(f"{_tag_time()} {Y(line)}", flush=True)
 
 
 def log_order_progress(stage: str, detail: str = "") -> None:
@@ -459,7 +612,7 @@ def log_interval(eff_seconds: int, fast: bool) -> None:
     """現在の更新間隔を目立つ形で出力"""
     mode = "高速" if fast else "通常"
     icon = E("⏱ ")
-    print(f"{_tag_time()} {icon}現在の更新間隔: {Gb(str(eff_seconds))} 秒（{Cb(mode)}）", flush=True)
+    print(f"{_tag_time()} {icon}現在の更新間隔: {Gb(str(eff_seconds))} 秒（{Yb(mode)}）", flush=True)
 
 
 # ===== メール通知（任意設定） =====
@@ -518,44 +671,36 @@ def _mail_send(subject: str, body: str) -> bool:
         return False
 
 
-def notify_high_price(title: str, price_text: str, url: str) -> bool:
+def notify_high_price(*, asin: str, title: str, price_text: str, dp_url: str, vine_url: str) -> bool:
     """しきい値以上の検知を通知（一度だけ）。"""
     subj = "【Vine】高額候補を検知"
     body = (
         f"タイトル: {title}\n"
         f"価格: {price_text}\n"
-        f"URL: {url}\n"
+        f"ASIN: {asin}\n"
+        f"URL: {dp_url}\n"
+        f"Vine: {vine_url}\n"
         f"日時: {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n"
     )
     sent_mail = _mail_send(subj, body)
-    sent_tg = tg_send(
-        f"{subj}\n\n"
-        f"タイトル: {title}\n"
-        f"価格: {price_text}\n"
-        f"URL: {url}\n"
-        f"日時: {datetime.datetime.now():%Y-%m-%d %H:%M:%S}\n"
-    )
+    sent_tg = tg_send(_fmt_tg_item_event("高額候補", asin=asin, title=title, price_text=price_text, dp_url=dp_url, vine_url=vine_url))
     return bool(sent_mail or sent_tg)
 
 
-def notify_order_success(title: str, price_text: str, url: str, reason: str = "") -> bool:
+def notify_order_success(*, asin: str, title: str, price_text: str, dp_url: str, vine_url: str, reason: str = "") -> bool:
     """自動注文成功の通知（一度だけ）。"""
     reason_s = f"\n理由: {reason}" if reason else ""
     subj = "【Vine】自動注文 成功"
     body = (
         f"タイトル: {title}\n"
         f"価格: {price_text}\n"
-        f"URL: {url}\n"
+        f"ASIN: {asin}\n"
+        f"URL: {dp_url}\n"
+        f"Vine: {vine_url}\n"
         f"日時: {datetime.datetime.now():%Y-%m-%d %H:%M:%S}{reason_s}\n"
     )
     sent_mail = _mail_send(subj, body)
-    sent_tg = tg_send(
-        f"{subj}\n\n"
-        f"タイトル: {title}\n"
-        f"価格: {price_text}\n"
-        f"URL: {url}\n"
-        f"日時: {datetime.datetime.now():%Y-%m-%d %H:%M:%S}{reason_s}\n"
-    )
+    sent_tg = tg_send(_fmt_tg_item_event("自動注文 成功", asin=asin, title=title, price_text=price_text, dp_url=dp_url, vine_url=vine_url))
     return bool(sent_mail or sent_tg)
 
 
@@ -640,7 +785,7 @@ class KeyReader:
 
 # ===== 収集JS =====
 COLLECT_JS = r"""() => {
-  // ---- Vine厳密収集 v6（/vine/ページなら全体をVine領域として扱う + ルート優先 + deny除外）----
+  // ---- Vine厳密収集 v7（カート/ナビ誤検知対策を追加）----
   // ポリシー:
   //  1) URL が /vine/ を含む場合は「ページ全体＝Vine領域」。Vine外ウィジェットの誤検知は見出しテキストの deny で除外。
   //  2) 可能なら Vine ルート要素（グリッド/スクロールコンテナ）を優先して限定探索。
@@ -649,9 +794,47 @@ COLLECT_JS = r"""() => {
 
   const isVinePage = /\/vine\//.test(location.pathname || "") || /queue=potluck/.test(location.search || "");
 
-  const denySections = /(閲覧履歴の新着|閲覧履歴に基づくおすすめ|最近閲覧した商品に関連|最近チェックした|視聴履歴に基づくおすすめ|読書履歴に基づくおすすめ|Amazon\s*おすすめ|お買い得セール|タイムセール(?:祭り)?|プライムデー|ブラックフライデー|ランキング|ベストセラー|セール中|特選タイムセール|Amazon\s*デバイス(?:・アクセサリ)?|Amazon\s*Devices?|Alexa(?:と連動する)?|スマート\s*ホーム(?:商品|デバイス|アクセサリ)?|人気のスマートホーム(?:商品|デバイス)|Works\s*with\s*Alexa|Ring|Blink|Eero|Fire\s*TV|Fire\s*Tablet|Echo(?:\s*Dot|\s*Show|\s*Bud)?|Kindle|Amazon\s*Smart\s*Plug|Amazon\s*basics)/i;
+  const denySections = /(閲覧履歴の新着|閲覧履歴に基づくおすすめ|最近閲覧した商品に関連|最近チェックした|視聴履歴に基づくおすすめ|読書履歴に基づくおすすめ|Amazon\s*おすすめ|お買い得セール|タイムセール(?:祭り)?|プライムデー|ブラックフライデー|ランキング|ベストセラー|セール中|特選タイムセール|Amazon\s*デバイス(?:・アクセサリ)?|Amazon\s*Devices?|Alexa(?:と連動する)?|スマート\s*ホーム(?:商品|デバイス|アクセサリ)?|人気のスマートホーム(?:商品|デバイス)|Works\s*with\s*Alexa|Ring|Blink|Eero|Fire\s*TV|Fire\s*Tablet|Echo(?:\s*Dot|\s*Show|\s*Bud)?|Kindle|Amazon\s*Smart\s*Plug|Amazon\s*basics|ショッピングカート|カートに追加|カート|Shopping\s*Cart|Added\s*to\s*Cart|\bCart\b)/i;
 
   const allowVineSections = /(\bVine\b|\bVINE\b|Vine\s*メンバー|Vine\s*対象|Vine\s*限定|Vine\s*おすすめ|Vine\s*商品|Vine\s*アイテム)/i;
+
+  // ナビ/カート等のVine外UIを除外（カート内商品の誤検知対策）
+  const reAriaCart = /(ショッピングカート|カート|Shopping\s*Cart|Added\s*to\s*Cart|\bCart\b)/i;
+
+  function isExcludedNode(el){
+    try{
+      if(!el || el.nodeType !== 1) return false;
+      const id = (el.id || "");
+      if(id === "nav-flyout-ewc") return true;        // mini cart flyout
+      if(id && id.startsWith("nav-flyout")) return true;
+      if(id && (id === "nav-belt" || id === "nav-main" || id === "navbar" || id === "navFooter" || id === "nav-subnav" || id === "nav-tools")) return true;
+      if(id && /(nav-cart|cart|ewc)/i.test(id)) return true;
+      const aria = (el.getAttribute && (el.getAttribute("aria-label") || "")) || "";
+      if(aria && reAriaCart.test(aria)) return true;
+      const cls = String(el.className || "");
+      if(cls && /(nav-flyout|ewc|mini-cart|nav-cart)/i.test(cls)) return true;
+    }catch(e){}
+    return false;
+  }
+
+  function inExcludedArea(node){
+    let el = (node && node.nodeType === 1) ? node : (node && node.parentElement ? node.parentElement : null);
+    let hop = 0;
+    while(el && hop < 40){
+      if(isExcludedNode(el)) return true;
+      let next = null;
+      try{ next = el.parentElement; }catch(e){ next = null; }
+      if(!next){
+        try{
+          const rn = el.getRootNode && el.getRootNode();
+          next = rn && rn.host ? rn.host : null; // shadow DOM 跨ぎ
+        }catch(e){ next = null; }
+      }
+      el = next;
+      hop++;
+    }
+    return false;
+  }
 
   // Vine ルート候補（環境により変わるため複数）
   const VINE_ROOT_SELECTORS = [
@@ -723,15 +906,17 @@ COLLECT_JS = r"""() => {
 
   const ROOT = findVineRoot();
 
-  // Vine領域判定
-  function inVineSection(node){
-    const sect = sectionText(node || document.body);
-    if(sect && denySections.test(sect)) return false; // deny は常に優先除外
-    if(isVinePage) return true;                       // /vine/ ならページ全体を許可
-    // 通常ページではルート内 or 見出しで Vine を確認
-    try{ if(ROOT && node && ROOT.contains(node)) return true; }catch(e){}
-    return allowVineSections.test(sect || "");
-  }
+	  // Vine領域判定
+	  function inVineSection(node){
+	    if(inExcludedArea(node || document.body)) return false; // カート/ナビ等は常に除外
+	    // Vine ルート内は最優先で許可（body側の見出し汚染で全体が deny されるのを防ぐ）
+	    try{ if(ROOT && node && ROOT.contains(node)) return true; }catch(e){}
+	    const sect = sectionText(node || document.body);
+	    if(sect && denySections.test(sect)) return false; // deny は常に優先除外
+	    if(isVinePage) return true;                       // /vine/ ならページ全体を許可
+	    // 通常ページではルート内 or 見出しで Vine を確認
+	    return allowVineSections.test(sect || "");
+	  }
 
   const uniq = new Set();
   const out = [];
@@ -788,6 +973,7 @@ COLLECT_JS = r"""() => {
     qsaDeep(document, '[data-asin]').forEach(card=>{
       const asin=(card.getAttribute('data-asin')||'').trim();
       if(!/^[A-Z0-9]{10}$/.test(asin)) return;
+      if(inExcludedArea(card)) return;
       const sect = sectionText(card);
       const txt  = cardText(card);
       if(sect && denySections.test(sect)) return;
@@ -985,6 +1171,30 @@ class VineWatcher:
         log_warn("サンクス判定がタイムアウトしました")
         return False, "timeout"
 
+    def _is_checkout_like(self) -> bool:
+        """チェックアウト/注文確認系の画面かざっくり判定（誤クリック防止用）"""
+        try:
+            url = self.page.url or ""
+        except Exception:
+            url = ""
+        try:
+            title = self.page.title() or ""
+        except Exception:
+            title = ""
+        patterns_url = r"/(buy|gp/buy|thankyou|checkout|gp/cart|cart|ap/signin|confirm|confirmation|payselect|payments|shipaddress|shipoption)"
+        patterns_title = r"(注文|ご注文|レジ|チェックアウト|お支払い|配送|アドレス|確認|支払い方法|ありがとうございます|完了|確定|Thank you|Order placed)"
+        try:
+            if re.search(patterns_url, url, re.I):
+                return True
+        except Exception:
+            pass
+        try:
+            if re.search(patterns_title, title):
+                return True
+        except Exception:
+            pass
+        return False
+
     def __init__(self, headed: bool):
         self.headed = headed
         self.fast_wins = parse_windows(FAST_WINDOWS)
@@ -1006,6 +1216,13 @@ class VineWatcher:
         self.interval = int(INTERVAL)
         self.fast_interval = int(FAST_INTERVAL)
         self.allow_dup_order = bool(ALLOW_DUP_ORDER)
+        self.tab_foreground = bool(TAB_FOREGROUND)
+        try:
+            saved_tab_fg = self.db.get("__tab_foreground")
+            if isinstance(saved_tab_fg, bool):
+                self.tab_foreground = saved_tab_fg
+        except Exception:
+            pass
 
         self.order_threshold = ORDER_THRESHOLD
         self.brand_always = set()
@@ -1200,8 +1417,8 @@ class VineWatcher:
         prefs = {
             "browser.link.open_newwindow": 3,
             "browser.link.open_newwindow.restriction": 0,
-            "browser.tabs.loadDivertedInBackground": (not TAB_FOREGROUND),
-            "browser.tabs.loadInBackground": (not TAB_FOREGROUND),
+            "browser.tabs.loadDivertedInBackground": (not self.tab_foreground),
+            "browser.tabs.loadInBackground": (not self.tab_foreground),
             "browser.tabs.opentabfor.middleclick": True,
             "browser.tabs.insertAfterCurrent": True,
             "dom.disable_open_during_load": False,
@@ -1252,6 +1469,21 @@ class VineWatcher:
         self._open_browser()
         self.page.goto(URL, wait_until="domcontentloaded", timeout=60000)
 
+    def _restart_browser_keep_mode(self):
+        self._close_browser()
+        self._open_browser()
+        self.page.goto(URL, wait_until="domcontentloaded", timeout=60000)
+
+    def _toggle_tab_foreground(self):
+        self.tab_foreground = not bool(self.tab_foreground)
+        try:
+            self.db["__tab_foreground"] = bool(self.tab_foreground)
+            save_db(self.db)
+        except Exception:
+            pass
+        self._restart_browser_keep_mode()
+        print(f"新規タブ前面化: {'ON' if self.tab_foreground else 'OFF'}（f で切替）")
+
     # ---- 表示 ----
     def banner(self):
         os.system("clear" if os.name == "posix" else "cls")
@@ -1263,6 +1495,8 @@ class VineWatcher:
         print(" 🔍   スキャン: g 可視 / G 全件深")
         print(" 📦 既知含む: e 可視 / E 全件深（新規以外も処理・自動注文）")
         print(" 🛒 直前を注文: o")
+        print(" 📊 週サマリ: u（過去7日・新着件数をTelegramへ）")
+        print(" 🗂 新規タブ前面化: f 切替")
         print(" 📒   ログ: l/L 再出力   | 🏷 ブランド: b/B 編集")
         print(" 🧮 しきい値: t/T 変更 | 📸 スクショ: s 切替   | 🤖 自動注文: a 切替")
         print(f" キー入力: {'有効（' + self.key.source + '）' if self.key.enabled else '無効'}\n")
@@ -1271,6 +1505,7 @@ class VineWatcher:
         print(f" 🟢 状態：{'稼働中' if not self.paused else '⏸ 一時停止中'}（p で切替）")
         print(f" 📸 スクショ：{'ON' if getattr(self, 'shot_enabled', True) else 'OFF'}（s で切替）")
         print(f" 🤖 自動注文：{'ON' if getattr(self, 'auto_order', bool(AUTO_ORDER)) else 'OFF'}（a で切替）")
+        print(f" 🗂 新規タブ前面化：{'ON' if getattr(self, 'tab_foreground', bool(TAB_FOREGROUND)) else 'OFF'}（f で切替）")
         print(f" 🧮 しきい値：{self.order_threshold} 円（t で変更）")
         print(f" 🏷 常時ブランド：{len(self.brand_always)} 件（b で編集）")
         print(f" 📄 ブランドファイル：{Path(BRANDS_FILE).resolve()}")
@@ -1287,6 +1522,58 @@ class VineWatcher:
         print(f" 📂 Shots：{Path(SHOTS_DIR).resolve()}")
         print(f" 🗄 DB：   {Path(DB_PATH).resolve()}")
         print("----------------------------------------------------------")
+
+    def _parse_dt(self, s: str) -> Optional[datetime.datetime]:
+        if not s:
+            return None
+        raw = str(s).strip()
+        if not raw:
+            return None
+        try:
+            # "YYYY-MM-DDTHH:MM:SS" / "YYYY-MM-DD HH:MM:SS" を想定
+            raw = raw.replace("Z", "")
+            raw = raw.replace("T", " ", 1)
+            raw = raw.split(".", 1)[0]
+            return datetime.datetime.fromisoformat(raw)
+        except Exception:
+            return None
+
+    def _build_weekly_new_summary(self, days: int = 7) -> str:
+        now = datetime.datetime.now()
+        since = now - datetime.timedelta(days=max(1, int(days)))
+        buckets: Dict[datetime.datetime, int] = {}
+        total = 0
+
+        for asin, rec in (self.db or {}).items():
+            if not asin or str(asin).startswith("__"):
+                continue
+            if not isinstance(rec, dict):
+                continue
+            dt = self._parse_dt(rec.get("first_seen") or rec.get("last_seen") or "")
+            if not dt:
+                continue
+            if dt < since:
+                continue
+            key = dt.replace(minute=0, second=0, microsecond=0)
+            buckets[key] = int(buckets.get(key, 0)) + 1
+            total += 1
+
+        queue_label = _vine_queue_label(URL)
+        head = f"【{queue_label}】[{now:%Y-%m-%d %H:%M:%S}] 1週間サマリ（新着）"
+        period = f"期間: {since:%Y-%m-%d %H:%M}〜{now:%Y-%m-%d %H:%M}"
+
+        lines = []
+        for dt in sorted(buckets.keys()):
+            lines.append(f"{dt:%Y-%m-%d %H}:00 {buckets[dt]}件")
+
+        if not lines:
+            return "\n".join([head, "新着: 0件", period, URL])
+
+        return "\n".join([head, *lines, f"合計: {total}件", period, URL])
+
+    def send_weekly_new_summary(self) -> bool:
+        msg = self._build_weekly_new_summary(days=7)
+        return tg_send(msg)
 
     # ---- Vine移動/待機 ----
     def _await_items(self, timeout_ms: int = 12000):
@@ -1516,7 +1803,7 @@ class VineWatcher:
                     p = self._ctx.new_page()
                     p.goto(dp_url, wait_until="domcontentloaded", timeout=60000)
                 try:
-                    if p and TAB_FOREGROUND:
+                    if p and self.tab_foreground:
                         p.bring_to_front()
                 except Exception:
                     pass
@@ -1887,6 +2174,14 @@ class VineWatcher:
             return False
 
     def _click_cta_for_asin(self, asin: str) -> bool:
+        # 既にスクロール位置が下にあると、対象カードが「上」にあって探索できないことがある。
+        # まずはトップへ戻してから下方向に探索する。
+        try:
+            self.page.evaluate("window.scrollTo(0,0)")
+            time.sleep(0.08)
+        except Exception:
+            pass
+
         # 1) 対象カードまでスクロール
         if not self._scroll_to_card(asin, max_steps=72):
             return False
@@ -2151,7 +2446,8 @@ class VineWatcher:
                     # チェックアウト系タブにスイッチ
                     self.page = p
                     try:
-                        p.bring_to_front()
+                        if ORDER_FRONT and self.headed:
+                            p.bring_to_front()
                     except Exception:
                         pass
                     try:
@@ -2465,16 +2761,40 @@ class VineWatcher:
 
             if not placed:
                 log_err("確認ボタンが押せませんでした（商品のリクエスト/申し込み）")
+                try:
+                    self._debug_dump_if_empty(tag=f"order_confirm_fail_{asin}")
+                except Exception:
+                    pass
                 return False
             log_stage("確認送信", f"使用セレクタ: {used_confirm or '(自動検出)'}")
 
-            # クリックにより新規タブ・ウィンドウが開く場合に備えて追従
+            # まずは Vine 側で完了するケース（モーダル閉→カードが Requested になる等）を優先して判定
+            ok0, reason0 = self._wait_order_placement(timeout_s=8.0, asin=asin)
+            if ok0:
+                log_ok(f"自動注文: 成功（{reason0}）")
+                return True
+            if reason0 in ("signin-required", "auth-challenge", "unavailable-or-limit"):
+                log_err(f"自動注文: 失敗（{reason0}）")
+                try:
+                    self._debug_dump_if_empty(tag=f"order_fail_{reason0}_{asin}")
+                except Exception:
+                    pass
+                return False
+
+            # チェックアウトに飛ぶケースだけ、以降の自動前進を実施（誤クリック防止）
             try:
                 followed = self._follow_checkout_tab(timeout_s=6.0)
-                if followed:
+                if followed or self._is_checkout_like():
                     log_stage("チェックアウト画面へ移動")
             except Exception:
                 pass
+            if not self._is_checkout_like():
+                log_err("申込後の状態変化を確認できませんでした（Vine完了/チェックアウト遷移のどちらも検出できず）")
+                try:
+                    self._debug_dump_if_empty(tag=f"order_no_transition_{asin}")
+                except Exception:
+                    pass
+                return False
 
             # 中間ステップの自動前進（配送/支払い確認など）
             try:
@@ -2513,6 +2833,10 @@ class VineWatcher:
                 log_ok(f"自動注文: 成功（{reason}）")
             else:
                 log_err(f"自動注文: 失敗（{reason}）")
+                try:
+                    self._debug_dump_if_empty(tag=f"order_fail_{reason}_{asin}")
+                except Exception:
+                    pass
 
             if DEBUG_FIND:
                 try:
@@ -2724,6 +3048,7 @@ class VineWatcher:
         return False
 
     def _handle_one(self, asin: str, dp_url: str, allow_reorder: bool):
+        seen_before = asin in self.db
         title, price_text, shot, page_text, variant_prices = self._scrape_dp(dp_url or f"https://www.amazon.co.jp/dp/{asin}")
         price_int = price_to_int(price_text)
         now_iso = datetime.datetime.now().isoformat(timespec="seconds")
@@ -2751,10 +3076,86 @@ class VineWatcher:
             for vr in variant_prices:
                 print(f"  ↳ バリアント: {vr.get('label', '')} ｜ 価格: {vr.get('price', '')}")
 
+        # --- 通知: 新着（初回のみ） ---
+        try:
+            if (not seen_before) and (not rec.get("notified_new")):
+                # --- Sheetsログ: 新着（初回のみ） ---
+                try:
+                    if not rec.get("sheet_logged"):
+                        title_s = (title or "").strip()
+                        title_l = title_s.lower()
+                        priority_brands = list(getattr(self, "brand_always", []) or [])
+                        hits = [str(b) for b in priority_brands if b and str(b).lower() in title_l]
+                        hit_brand = sorted(hits, key=len, reverse=True)[0] if hits else ""
+                        is_priority = bool(hits)
+                        res = gas_append_row(
+                            {
+                                "title": title_s,
+                                "price": (price_text or "").strip(),
+                                "asin": asin,
+                                "queue_url": URL,
+                                "brand": hit_brand,
+                                "priority": "⚡" if is_priority else "",
+                            }
+                        )
+                        if isinstance(res, dict) and res.get("ok") is True:
+                            rec["sheet_logged"] = True
+                            if "appended" in res:
+                                rec["sheet_appended"] = bool(res.get("appended"))
+                            else:
+                                # 旧エンドポイント互換: ok=true のみ返る場合がある
+                                rec["sheet_appended"] = True
+                            rec["sheet_skipped"] = str(res.get("skipped") or "")
+                            rec["sheet_last"] = datetime.datetime.now().isoformat(timespec="seconds")
+                            save_db(self.db)
+                            if rec["sheet_appended"]:
+                                log_ok("Sheetsログ: 追記しました")
+                            elif rec.get("sheet_skipped") == "duplicate":
+                                log_info("Sheetsログ: 既に同日重複（スキップ）")
+                        else:
+                            if isinstance(res, dict) and str(res.get("error") or "") in ("unauthorized", "forbidden(secret)"):
+                                log_warn("Sheetsログ: SECRET不一致（unauthorized）")
+                            elif not GAS_DISABLE and GAS_WEBAPP_URL:
+                                log_warn("Sheetsログ: 失敗（WebアプリURL/アクセス権/SECRETを確認）")
+                except Exception:
+                    pass
+
+                msg = _fmt_tg_item_event(
+                    "新着",
+                    asin=asin,
+                    title=title,
+                    price_text=price_text or "価格不明",
+                    dp_url=rec.get("url", dp_url or f"https://www.amazon.co.jp/dp/{asin}"),
+                    vine_url=URL,
+                )
+                # 1行目だけを統一フォーマットに変更（以降の行は変更しない）
+                lines = (msg or "").splitlines()
+                if lines:
+                    p = (price_text or "").strip()
+                    title_s = (title or "").strip()
+                    title_l = title_s.lower()
+                    priority_brands = list(getattr(self, "brand_always", []) or [])
+                    is_priority = any(str(b).lower() in title_l for b in priority_brands if b)
+                    prefix = "⚡️【新着】" if is_priority else "【新着】"
+                    max_len = 34 if is_priority else 38
+                    lines[0] = f"{prefix}{p} / {title_s[:max_len]}"
+                    msg = "\n".join(lines)
+                if tg_send(msg):
+                    rec["notified_new"] = True
+                    save_db(self.db)
+        except Exception:
+            pass
+
         # --- 通知: 高額検知（1回だけ） ---
         try:
             if price_int is not None and price_int >= self.order_threshold and not rec.get("notified_high"):
-                if notify_high_price(title, price_text or "", rec["url"]):
+                if notify_high_price(
+                    asin=asin,
+                    title=title,
+                    price_text=price_text or "",
+                    dp_url=rec["url"],
+                    vine_url=URL,
+                ):
                     rec["notified_high"] = True
                     save_db(self.db)
         except Exception:
@@ -2782,7 +3183,14 @@ class VineWatcher:
         # --- 通知: 自動注文成功（1回だけ） ---
         try:
             if rec.get("auto_ordered") and not rec.get("notified_order"):
-                if notify_order_success(title, price_text or "", rec["url"], reason="auto"):
+                if notify_order_success(
+                    asin=asin,
+                    title=title,
+                    price_text=price_text or "",
+                    dp_url=rec["url"],
+                    vine_url=URL,
+                    reason="auto",
+                ):
                     rec["notified_order"] = True
                     save_db(self.db)
         except Exception:
@@ -3015,8 +3423,13 @@ class VineWatcher:
                 elif ch == "a":
                     self.auto_order = not self.auto_order
                     print(f"自動注文: {'ON' if self.auto_order else 'OFF'}")
+                elif ch == "f":
+                    self._toggle_tab_foreground()
                 elif ch == "o":
                     self.order_last_captured()
+                elif ch == "u":
+                    ok = self.send_weekly_new_summary()
+                    print("週サマリ送信: 成功" if ok else "週サマリ送信: 失敗（Telegram設定/通信を確認）")
                 elif ch == "[":
                     self.interval = max(1, int(self.interval) - 1)
                     print(f"通常間隔: {self.interval}s")
@@ -3232,10 +3645,27 @@ def main():
     import argparse
 
     parser = argparse.ArgumentParser(description="Amazon Vine ウォッチャー（Firefox｜超低遅延）")
-    parser.add_argument("--headed", action="store_true", help="ウィンドウ表示で起動")
+    g = parser.add_mutually_exclusive_group()
+    g.add_argument("--headed", action="store_true", help="ウィンドウ表示で起動（デフォルト）")
+    g.add_argument("--headless", action="store_true", help="ヘッドレスで起動")
+    parser.add_argument("--gas-test", action="store_true", help="スプレッドシート(GAS)追記の疎通テストのみ実行")
     args = parser.parse_args()
 
-    w = VineWatcher(headed=args.headed)
+    if args.gas_test:
+        payload = {
+            "title": f"疎通テスト {datetime.datetime.now():%Y-%m-%d %H:%M:%S}",
+            "price": "¥12,980",
+            "asin": "B0TEST0001",
+            "queue_url": URL,
+            "brand": "TEST",
+            "priority": "⚡",
+        }
+        res = gas_append_row(payload)
+        print(json.dumps(res or {"ok": False, "error": "no_response"}, ensure_ascii=False))
+        return
+
+    headed = not bool(getattr(args, "headless", False))
+    w = VineWatcher(headed=headed)
     w.setup_signals()
 
     def cleanup(*_):
@@ -3259,4 +3689,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-

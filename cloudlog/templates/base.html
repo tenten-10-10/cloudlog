@@ -1,0 +1,57 @@
+<!doctype html>
+<html lang="ja">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>{{ title or "Cloudlog Clone" }}</title>
+    <link rel="stylesheet" href="/static/style.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="container topbar__inner">
+        <a class="brand" href="/">
+          <span class="brand__mark" aria-hidden="true"></span>
+          <span>Cloudlog Clone</span>
+        </a>
+
+        {% if auth_user %}
+        <nav class="nav">
+          <a href="/">ダッシュボード</a>
+          <a href="/entries">工数入力</a>
+          <a href="/reports">レポート</a>
+          {% if current_user and (current_user.role == ROLE_MANAGER or current_user.role == ROLE_ADMIN) %}
+          <a href="/approval">承認</a>
+          <a href="/projects">案件管理</a>
+          <a href="/status">入力ステータス</a>
+          <a href="/settings">設定</a>
+          {% endif %}
+          {% if current_user and current_user.role == ROLE_ADMIN %}
+          <a href="/users">ユーザー管理</a>
+          {% endif %}
+        </nav>
+        {% endif %}
+
+        <div class="actions">
+          {% if auth_user %}
+          <span class="badge">{{ auth_user }} / {{ current_user.role if current_user else "-" }}</span>
+          <form action="/logout" method="post">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+            <button class="btn btn--ghost" type="submit">ログアウト</button>
+          </form>
+          {% else %}
+            {% if allow_registration %}
+            <a class="btn btn--ghost" href="/register">新規登録</a>
+            {% endif %}
+            <a class="btn" href="/login">ログイン</a>
+          {% endif %}
+        </div>
+      </div>
+    </header>
+
+    <main class="container">
+      {% block content %}{% endblock %}
+    </main>
+
+    <script src="/static/app.js" defer></script>
+  </body>
+</html>

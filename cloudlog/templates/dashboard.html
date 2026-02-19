@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="row spread">
+    <h1>ダッシュボード</h1>
+    <form method="get" action="/" class="inline-form">
+      <label>対象月
+        <input type="month" name="month" value="{{ month }}" />
+      </label>
+      <button class="btn" type="submit">更新</button>
+    </form>
+  </div>
+
+  {% if timer %}
+  <div class="notice">
+    タイマー稼働中: {{ timer_minutes }}分経過
+  </div>
+  {% endif %}
+
+  <div class="cards">
+    <article class="card">
+      <h2>総工数</h2>
+      <p>{{ fmt_hours(totals.total_hours) }}h</p>
+    </article>
+    <article class="card">
+      <h2>下書き</h2>
+      <p>{{ fmt_hours(totals.draft_hours) }}h</p>
+    </article>
+    <article class="card">
+      <h2>申請中</h2>
+      <p>{{ fmt_hours(totals.submitted_hours) }}h</p>
+    </article>
+    <article class="card">
+      <h2>承認済み</h2>
+      <p>{{ fmt_hours(totals.approved_hours) }}h</p>
+    </article>
+    <article class="card">
+      <h2>差し戻し</h2>
+      <p>{{ fmt_hours(totals.rejected_hours) }}h</p>
+    </article>
+    {% if current_user and (current_user.role == ROLE_MANAGER or current_user.role == ROLE_ADMIN) %}
+    <article class="card">
+      <h2>承認待ち件数</h2>
+      <p>{{ totals.pending_approvals }}</p>
+    </article>
+    {% endif %}
+  </div>
+</section>
+
+<section class="panel">
+  <h2>案件別工数（上位）</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>案件コード</th>
+        <th>案件名</th>
+        <th>実績工数</th>
+        <th>予算工数</th>
+        <th>進捗率</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in top_projects %}
+      <tr>
+        <td>{{ p.project_code }}</td>
+        <td>{{ p.project_name }}</td>
+        <td>{{ fmt_hours(p.actual_hours) }}h</td>
+        <td>{{ fmt_hours(p.budget_hours) }}h</td>
+        <td>
+          {% set ratio = 0 %}
+          {% if p.budget_hours > 0 %}
+            {% set ratio = (p.actual_hours / p.budget_hours * 100) %}
+          {% endif %}
+          <div class="progress">
+            <div class="progress__bar" style="width: {{ '%.1f' % (ratio if ratio < 100 else 100) }}%"></div>
+          </div>
+          {{ '%.1f' % ratio }}%
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="5">データがありません</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+{% if status_rows %}
+<section class="panel">
+  <h2>入力ステータス一覧</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>ユーザー</th>
+        <th>下書き</th>
+        <th>申請中</th>
+        <th>承認済み</th>
+        <th>差し戻し</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in status_rows %}
+      <tr>
+        <td>{{ row.username }}</td>
+        <td>{{ fmt_hours(row.draft_hours) }}h</td>
+        <td>{{ fmt_hours(row.submitted_hours) }}h</td>
+        <td>{{ fmt_hours(row.approved_hours) }}h</td>
+        <td>{{ fmt_hours(row.rejected_hours) }}h</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endif %}
+{% endblock %}

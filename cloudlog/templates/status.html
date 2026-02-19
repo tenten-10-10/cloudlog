@@ -1,0 +1,40 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>入力ステータス一覧</h1>
+  <form method="get" action="/status" class="inline-form wrap">
+    <label>開始日
+      <input type="date" name="from_date" value="{{ from_date }}" />
+    </label>
+    <label>終了日
+      <input type="date" name="to_date" value="{{ to_date }}" />
+    </label>
+    <button class="btn" type="submit">更新</button>
+  </form>
+
+  <table>
+    <thead>
+      <tr>
+        <th>ユーザー</th>
+        <th>下書き</th>
+        <th>申請中</th>
+        <th>承認済み</th>
+        <th>差し戻し</th>
+        <th>承認準備OK</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr>
+        <td>{{ row.username }}</td>
+        <td>{{ fmt_hours(row.draft_hours) }}h</td>
+        <td>{{ fmt_hours(row.submitted_hours) }}h</td>
+        <td>{{ fmt_hours(row.approved_hours) }}h</td>
+        <td>{{ fmt_hours(row.rejected_hours) }}h</td>
+        <td>{% if row.ready_for_approval %}OK{% else %}-{% endif %}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

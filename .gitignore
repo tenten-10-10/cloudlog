@@ -9,6 +9,7 @@ venv/
 env/
 
 .env
+.env.cloudlog
 .sitewatcher/
+/.cloudlog/
 sitewatcher_state.sqlite3
-

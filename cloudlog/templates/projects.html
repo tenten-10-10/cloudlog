@@ -1,0 +1,125 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>案件管理</h1>
+  <div class="split">
+    <form method="post" action="/clients/new" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <h2>顧客追加</h2>
+      <label>顧客名
+        <input type="text" name="name" required />
+      </label>
+      <button class="btn" type="submit">追加</button>
+    </form>
+
+    <form method="post" action="/projects/new" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <h2>案件追加</h2>
+      <label>顧客
+        <select name="client_id">
+          <option value="">未指定</option>
+          {% for c in clients %}
+            <option value="{{ c.id }}">{{ c.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>案件名
+        <input type="text" name="name" required />
+      </label>
+      <label>案件コード
+        <input type="text" name="code" required />
+      </label>
+      <label>説明
+        <input type="text" name="description" />
+      </label>
+      <label>予算工数(h)
+        <input type="number" name="budget_hours" min="0" step="0.1" value="0" />
+      </label>
+      <label>予算原価(円)
+        <input type="number" name="budget_cost" min="0" step="100" value="0" />
+      </label>
+      <label>売上単価(円/h)
+        <input type="number" name="bill_rate" min="0" step="100" value="0" />
+      </label>
+      <label>開始日
+        <input type="date" name="start_date" />
+      </label>
+      <label>終了日
+        <input type="date" name="end_date" />
+      </label>
+      <button class="btn" type="submit">追加</button>
+    </form>
+
+    <form method="post" action="/tasks/new" class="form-grid">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <h2>タスク追加</h2>
+      <label>案件
+        <select name="project_id" required>
+          {% for p in projects %}
+            <option value="{{ p.id }}">{{ p.code }} - {{ p.name }}</option>
+          {% endfor %}
+        </select>
+      </label>
+      <label>タスク名
+        <input type="text" name="name" required />
+      </label>
+      <button class="btn" type="submit">追加</button>
+    </form>
+  </div>
+</section>
+
+<section class="panel">
+  <h2>案件一覧</h2>
+  <table>
+    <thead>
+      <tr>
+        <th>コード</th>
+        <th>案件名</th>
+        <th>顧客</th>
+        <th>状態</th>
+        <th>予算工数</th>
+        <th>予算原価</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for p in projects %}
+      <tr>
+        <td>{{ p.code }}</td>
+        <td>{{ p.name }}</td>
+        <td>{{ p.client_name or "-" }}</td>
+        <td>{{ p.status }}</td>
+        <td>{{ fmt_hours(p.budget_hours) }}h</td>
+        <td>{{ '%.0f' % p.budget_cost }} 円</td>
+        <td>
+          {% if p.status == "active" %}
+          <form method="post" action="/projects/{{ p.id }}/archive" class="inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+            <button class="btn btn--ghost" type="submit">アーカイブ</button>
+          </form>
+          {% endif %}
+        </td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>タスク一覧</h2>
+  <table>
+    <thead>
+      <tr><th>案件</th><th>タスク</th><th>状態</th></tr>
+    </thead>
+    <tbody>
+      {% for t in tasks %}
+      <tr>
+        <td>{{ t.project_code }} - {{ t.project_name }}</td>
+        <td>{{ t.name }}</td>
+        <td>{{ t.status }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
