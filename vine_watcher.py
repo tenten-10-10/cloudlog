@@ -73,6 +73,26 @@ def tg_send(text: str) -> bool:
         return False
 
 
+def tg_send_async(text: str) -> None:
+    """Telegram送信をバックグラウンドで実行（監視ループをブロックしない）。"""
+    try:
+        import threading
+
+        threading.Thread(target=lambda: tg_send(text), daemon=True).start()
+    except Exception:
+        pass
+
+
+def run_async(fn) -> None:
+    """任意関数をバックグラウンドで実行（監視ループをブロックしない）。"""
+    try:
+        import threading
+
+        threading.Thread(target=fn, daemon=True).start()
+    except Exception:
+        pass
+
+
 # ===== Google Apps Script（スプレッドシート記録）=====
 GAS_WEBAPP_URL = os.getenv(
     "VINE_GAS_URL",
@@ -242,6 +262,36 @@ def E(sym: str) -> str:
 URL = os.environ.get("VINE_URL", "https://www.amazon.co.jp/vine/vine-items?queue=potluck").strip()
 INTERVAL = int(os.environ.get("VINE_INTERVAL", "10"))
 FAST_INTERVAL = int(os.environ.get("VINE_INTERVAL_FAST", "5"))
+try:
+    FAST_INTERVAL_MIN = float(os.environ.get("VINE_INTERVAL_FAST_MIN", "3"))
+except Exception:
+    FAST_INTERVAL_MIN = 3.0
+try:
+    FAST_INTERVAL_MAX = float(os.environ.get("VINE_INTERVAL_FAST_MAX", "5"))
+except Exception:
+    FAST_INTERVAL_MAX = 5.0
+try:
+    INTERVAL_JITTER_SEC = float(os.environ.get("VINE_INTERVAL_JITTER", "0.5"))
+except Exception:
+    INTERVAL_JITTER_SEC = 0.5
+try:
+    RELOAD_EVERY_FAST = int(os.environ.get("VINE_RELOAD_EVERY_FAST", "2"))
+except Exception:
+    RELOAD_EVERY_FAST = 2
+try:
+    RELOAD_EVERY_NORMAL = int(os.environ.get("VINE_RELOAD_EVERY_NORMAL", "5"))
+except Exception:
+    RELOAD_EVERY_NORMAL = 5
+ADAPTIVE_FAST_ENABLED = os.environ.get("VINE_ADAPTIVE_FAST", "1").lower() in ("1", "true", "yes")
+try:
+    ADAPTIVE_FAST_DAYS = int(os.environ.get("VINE_ADAPTIVE_FAST_DAYS", "28"))
+except Exception:
+    ADAPTIVE_FAST_DAYS = 28
+try:
+    ADAPTIVE_FAST_SPAN_HOURS = int(os.environ.get("VINE_ADAPTIVE_FAST_SPAN_HOURS", "2"))
+except Exception:
+    ADAPTIVE_FAST_SPAN_HOURS = 2
+ADAPTIVE_FAST_FALLBACK = os.environ.get("VINE_ADAPTIVE_FAST_FALLBACK", "21:00-23:00").strip()
 FAST_WINDOWS = os.environ.get(
     "VINE_FAST_WINDOWS",
     "07:55-08:10,12:55-13:10,14:40-15:10,15:40-16:10,16:40-17:10,19:55-20:10",
@@ -264,7 +314,50 @@ ORDER_FRONT = os.environ.get("VINE_ORDER_FRONT", "0").lower() in ("1", "true", "
 ORDER_MAX = float(os.environ.get("VINE_ORDER_MAX", "30"))
 ORDER_RETRY = float(os.environ.get("VINE_ORDER_RETRY_INTERVAL", "0.05"))
 
-DEFAULT_BRANDS_ALWAYS = ["Anker", "MOFT", "cado", "CASETIFY", "UGREEN", "CIO"]
+DEFAULT_BRANDS_ALWAYS = [
+    "Anker",
+    "MOFT",
+    "cado",
+    "CASETIFY",
+    "UGREEN",
+    "UGERRN",
+    "CIO",
+    "GRAVASTAR",
+    "Sony",
+    "ロジクール",
+    "INZONE",
+    "ラトックシステム",
+]
+ULTRA_PRIORITY_BRANDS = [
+    "gravastar",
+    "sony",
+    "ソニー",
+    "cado",
+    "ロジクール",
+    "logicool",
+    "inzone",
+    "ラトックシステム",
+    "ratoc",
+    "cio",
+]
+PREFIX_PRIORITY_BRANDS = ["cio", "ugreen", "ugerrn", "casetify", "anker", "moft", "canon", "キャノン", "epson", "エプソン", "panasonic", "パナ", "パナソニック"]
+PRINTER_BRANDS = ["canon", "キャノン", "epson", "エプソン", "panasonic", "パナ", "パナソニック"]
+PRINTER_CONSUMABLE_HINTS = [
+    "インク",
+    "トナー",
+    "カートリッジ",
+    "リフィル",
+    "詰め替え",
+    "詰替え",
+    "フィルター",
+    "フィルタ",
+    "ink",
+    "toner",
+    "cartridge",
+    "refill",
+    "filter",
+]
+GENUINE_HINTS = ["純正", "純正品", "genuine", "original", "正規品"]
 COLOR_PREF = ["緑", "green", "グリーン", "white", "ホワイト", "黒", "ブラック"]
 
 
@@ -1215,6 +1308,11 @@ class VineWatcher:
         # runtime-tunable config (キー操作で変更するものはインスタンス属性へ)
         self.interval = int(INTERVAL)
         self.fast_interval = int(FAST_INTERVAL)
+        self.fast_interval_min = float(FAST_INTERVAL_MIN)
+        self.fast_interval_max = float(FAST_INTERVAL_MAX)
+        self.interval_jitter_sec = float(INTERVAL_JITTER_SEC)
+        self.reload_every_fast = max(1, int(RELOAD_EVERY_FAST))
+        self.reload_every_normal = max(1, int(RELOAD_EVERY_NORMAL))
         self.allow_dup_order = bool(ALLOW_DUP_ORDER)
         self.tab_foreground = bool(TAB_FOREGROUND)
         try:
@@ -1234,11 +1332,13 @@ class VineWatcher:
         self._ordering = False
         self._suspend_depth = 0
         self._paused_saved = False
+        self._boot_phase = False
         self._selectors = {}
         self._load_selectors()
-        self._current_interval_effective = (
-            self.fast_interval if in_fast_window(datetime.datetime.now(), self.fast_wins) else self.interval
-        )
+        self.fast_windows_display = FAST_WINDOWS or "（未設定）"
+        self.adaptive_fast_spec = ""
+        self._refresh_fast_windows()
+        self._current_fast_mode = self._is_fast_mode_now()
 
     # ---- セレクタ記憶（ボタン位置の学習） ----
     def _load_selectors(self):
@@ -1491,7 +1591,7 @@ class VineWatcher:
         print(f"[{ts}] Amazon Vine ウォッチャー（Firefox｜日本語UI｜厳密収集｜超低遅延）\n")
         print("ショートカット（主要）")
         print(" 🟢/⏸  状態: p   | 🔄 リロード: r   | 🖥 ヘッドレス切替: w")
-        print(" ⏱   更新間隔: [ -1s / ] +1s ； { -10s / } +10s")
+        print(" ⏱   更新間隔: [ -1s / ] +1s ； { -0.5s / } +0.5s（高速レンジ）")
         print(" 🔍   スキャン: g 可視 / G 全件深")
         print(" 📦 既知含む: e 可視 / E 全件深（新規以外も処理・自動注文）")
         print(" 🛒 直前を注文: o")
@@ -1513,10 +1613,14 @@ class VineWatcher:
         print(f" 📝 出力：{'新着のみ' if ONLY_NEW else '通常'}")
         print(" ⏱ 更新間隔：")
         print(f"   ・通常：{self.interval} 秒")
-        print(f"   ・高速：{self.fast_interval} 秒")
-        eff_now = self.fast_interval if in_fast_window(datetime.datetime.now(), self.fast_wins) else self.interval
-        print(f"   ・現在：{eff_now} 秒（{'高速' if eff_now == self.fast_interval else '通常'}）")
-        print(f"   ・ウィンドウ：{FAST_WINDOWS or '（未設定）'}")
+        print(f"   ・高速：{self.fast_interval_min:g}〜{self.fast_interval_max:g} 秒")
+        now_mode_fast = self._is_fast_mode_now()
+        current_base = self._base_interval_seconds()
+        print(f"   ・現在：{current_base:.1f} 秒（{'高速' if now_mode_fast else '通常'}）")
+        print(f"   ・ウィンドウ：{self.fast_windows_display}")
+        if self.adaptive_fast_spec:
+            print(f"   ・推定ピーク：{self.adaptive_fast_spec}（過去{ADAPTIVE_FAST_DAYS}日）")
+        print(f"   ・ジッタ：±{self.interval_jitter_sec:g} 秒")
         print(f"   ・重複注文許可：{'ON' if self.allow_dup_order else 'OFF'}（VINE_ALLOW_DUP_ORDER）\n")
         print("保存先")
         print(f" 📂 Shots：{Path(SHOTS_DIR).resolve()}")
@@ -1574,6 +1678,92 @@ class VineWatcher:
     def send_weekly_new_summary(self) -> bool:
         msg = self._build_weekly_new_summary(days=7)
         return tg_send(msg)
+
+    def _infer_peak_fast_spec(self, days: int = 28, span_hours: int = 2) -> str:
+        now = datetime.datetime.now()
+        since = now - datetime.timedelta(days=max(1, int(days)))
+        span = max(1, min(4, int(span_hours)))
+        hourly = [0] * 24
+        total = 0
+        for asin, rec in (self.db or {}).items():
+            if not asin or str(asin).startswith("__"):
+                continue
+            if not isinstance(rec, dict):
+                continue
+            dt = self._parse_dt(rec.get("first_seen") or rec.get("last_seen") or "")
+            if not dt or dt < since:
+                continue
+            hourly[dt.hour] += 1
+            total += 1
+        if total < 6:
+            return ""
+        best_start = -1
+        best_sum = -1
+        for start in range(24):
+            window_sum = 0
+            for offset in range(span):
+                window_sum += hourly[(start + offset) % 24]
+            if window_sum > best_sum:
+                best_sum = window_sum
+                best_start = start
+        if best_start < 0:
+            return ""
+        if best_sum < max(3, int(total * 0.18)):
+            return ""
+        end = (best_start + span) % 24
+        return f"{best_start:02d}:00-{end:02d}:00"
+
+    def _refresh_fast_windows(self):
+        base_spec = FAST_WINDOWS
+        dynamic_spec = ""
+        if ADAPTIVE_FAST_ENABLED:
+            dynamic_spec = self._infer_peak_fast_spec(days=ADAPTIVE_FAST_DAYS, span_hours=ADAPTIVE_FAST_SPAN_HOURS)
+            if not dynamic_spec and ADAPTIVE_FAST_FALLBACK:
+                dynamic_spec = ADAPTIVE_FAST_FALLBACK
+        specs = [s for s in [base_spec, dynamic_spec] if s]
+        merged_spec = ",".join(specs)
+        self.fast_wins = parse_windows(merged_spec)
+        self.fast_windows_display = merged_spec or "（未設定）"
+        self.adaptive_fast_spec = dynamic_spec
+
+    def _is_fast_mode_now(self) -> bool:
+        return in_fast_window(datetime.datetime.now(), self.fast_wins)
+
+    def _base_interval_seconds(self) -> float:
+        if self._is_fast_mode_now():
+            lo = min(float(self.fast_interval_min), float(self.fast_interval_max))
+            hi = max(float(self.fast_interval_min), float(self.fast_interval_max))
+            return random.uniform(lo, hi)
+        return float(self.interval)
+
+    def _next_interval_seconds(self) -> float:
+        base = self._base_interval_seconds()
+        jitter = float(self.interval_jitter_sec)
+        val = base + random.uniform(-jitter, jitter)
+        if self._is_fast_mode_now():
+            min_fast = min(float(self.fast_interval_min), float(self.fast_interval_max)) - jitter
+            return max(max(2.0, min_fast), val)
+        return max(1.0, val)
+
+    def _send_first_hit_today_fast(self, asin: str, dp_url: str):
+        """その日最初の新着検知を最優先で通知（1日1回）。"""
+        today = datetime.datetime.now().strftime("%Y-%m-%d")
+        if str(self.db.get("__first_hit_day", "")) == today:
+            return
+        url = (dp_url or f"https://www.amazon.co.jp/dp/{asin}").strip()
+        msg = "\n".join(
+            [
+                f"【{_vine_queue_label(URL)}】[{datetime.datetime.now():%Y-%m-%d %H:%M:%S}] 本日最初の新着を検知",
+                f"ASIN: {asin}",
+                url,
+                URL,
+            ]
+        )
+        # 最速化のため待たずに送信し、監視・注文フローを先に進める
+        self.db["__first_hit_day"] = today
+        self.db["__first_hit_ts"] = datetime.datetime.now().isoformat(timespec="seconds")
+        save_db(self.db)
+        tg_send_async(msg)
 
     # ---- Vine移動/待機 ----
     def _await_items(self, timeout_ms: int = 12000):
@@ -1774,39 +1964,44 @@ class VineWatcher:
         p = None
         try:
             if DP_OPEN_MODE == "tab":
-                asin_m = re.search(r"/dp/([A-Z0-9]{10})", dp_url or "")
-                target = None
-                if asin_m:
-                    asin = asin_m.group(1)
-                    try:
-                        target = self.page.locator(f'[data-asin="{asin}"] a[href*="/dp/"]').first
-                        if (not target) or target.count() == 0:
-                            target = self.page.locator(f'a[href*="/dp/{asin}"]').first
-                    except Exception:
-                        target = None
-                try:
-                    if target and target.count() > 0:
-                        with self.page.expect_popup() as pop_info:
-                            target.click(timeout=2000, button="left")
-                        p = pop_info.value
-                    else:
-                        aid = "__pw_tmp_open_dp__"
-                        self.page.evaluate(
-                            "(url,id)=>{ let a=document.getElementById(id); if(!a){ a=document.createElement('a'); a.id=id; a.textContent='open'; a.style.cssText='position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0.01;z-index:2147483647;display:block;'; document.body.appendChild(a);} a.href=url; a.target='_blank'; a.rel='noopener'; }",
-                            dp_url,
-                            aid,
-                        )
-                        with self.page.expect_popup() as pop_info:
-                            self.page.locator(f"#{aid}").click(timeout=1800, button="left")
-                        p = pop_info.value
-                except Exception:
+                foreground_tabs = bool(self.tab_foreground) and (not self._boot_phase)
+                if not foreground_tabs:
                     p = self._ctx.new_page()
                     p.goto(dp_url, wait_until="domcontentloaded", timeout=60000)
-                try:
-                    if p and self.tab_foreground:
-                        p.bring_to_front()
-                except Exception:
-                    pass
+                else:
+                    asin_m = re.search(r"/dp/([A-Z0-9]{10})", dp_url or "")
+                    target = None
+                    if asin_m:
+                        asin = asin_m.group(1)
+                        try:
+                            target = self.page.locator(f'[data-asin="{asin}"] a[href*="/dp/"]').first
+                            if (not target) or target.count() == 0:
+                                target = self.page.locator(f'a[href*="/dp/{asin}"]').first
+                        except Exception:
+                            target = None
+                    try:
+                        if target and target.count() > 0:
+                            with self.page.expect_popup() as pop_info:
+                                target.click(timeout=2000, button="left")
+                            p = pop_info.value
+                        else:
+                            aid = "__pw_tmp_open_dp__"
+                            self.page.evaluate(
+                                "(url,id)=>{ let a=document.getElementById(id); if(!a){ a=document.createElement('a'); a.id=id; a.textContent='open'; a.style.cssText='position:fixed;left:-9999px;top:-9999px;width:1px;height:1px;opacity:0.01;z-index:2147483647;display:block;'; document.body.appendChild(a);} a.href=url; a.target='_blank'; a.rel='noopener'; }",
+                                dp_url,
+                                aid,
+                            )
+                            with self.page.expect_popup() as pop_info:
+                                self.page.locator(f"#{aid}").click(timeout=1800, button="left")
+                            p = pop_info.value
+                    except Exception:
+                        p = self._ctx.new_page()
+                        p.goto(dp_url, wait_until="domcontentloaded", timeout=60000)
+                    try:
+                        if p and self.tab_foreground:
+                            p.bring_to_front()
+                    except Exception:
+                        pass
                 try:
                     p.wait_for_load_state("domcontentloaded", timeout=60000)
                 except Exception:
@@ -1861,7 +2056,7 @@ class VineWatcher:
                         pass
 
             variant_prices = []
-            if VARY_COLLECT:
+            if VARY_COLLECT and not self.auto_order:
                 try:
                     labels = self._collect_variant_labels_quick(p, VARY_MAX)
                     variant_prices = self._collect_variant_prices_from_dp(p, labels, VARY_MAX)
@@ -2446,7 +2641,7 @@ class VineWatcher:
                     # チェックアウト系タブにスイッチ
                     self.page = p
                     try:
-                        if ORDER_FRONT and self.headed:
+                        if ORDER_FRONT and self.headed and (not self._boot_phase):
                             p.bring_to_front()
                     except Exception:
                         pass
@@ -2932,55 +3127,42 @@ class VineWatcher:
 
     # ---- ブランド/サイズ判定・処理 ----
     def _looks_large(self, title: str, page_text: str) -> bool:
-        t = (title or "") + "\n" + (page_text or "")
-        t = t.lower()
-        if any(
-            k in t
-            for k in [
-                "机",
-                "デスク",
-                "テーブル",
-                "ダイニング",
-                "学習机",
-                "ワークデスク",
-                "椅子",
-                "チェア",
-                "ソファ",
-                "ベッド",
-                "本棚",
-                "ラック",
-                "収納棚",
-                "テレビ台",
-                "ローテーブル",
-                "こたつ",
-                "コタツ",
-                "cabinet",
-                "desk",
-                "table",
-                "sofa",
-                "bed",
-                "bookshelf",
-                "shelf",
-                "rack",
-            ]
-        ):
+        t = ((title or "") + "\n" + (page_text or "")).lower()
+        # 大型扱いはデスク系を優先（モニターは除外）
+        if any(k in t for k in ["デスク", "机", "学習机", "ワークデスク", "desk"]):
+            if "モニター" in t or "monitor" in t:
+                return False
             return True
-        dims = []
-        for m in re.findall(r"(\d{2,3})\s*(?:cm|ｃｍ|センチ)", t):
-            try:
-                dims.append(int(m))
-            except Exception:
-                pass
-        for m in re.findall(r"(\d{2,3})\s*[x×＊\*]\s*(\d{2,3})\s*[x×＊\*]\s*(\d{2,3})\s*(?:cm|ｃｍ|センチ)", t):
-            try:
-                dims.extend(int(x) for x in m)
-            except Exception:
-                pass
-        if dims:
-            big_edges = sum(1 for v in dims if v >= 60)
-            if any(v >= 70 for v in dims) or big_edges >= 2:
-                return True
+        # 布団・マットレスはダブル/クイーンなら許可、それ以外は大型扱い
+        if any(k in t for k in ["布団", "ふとん", "マットレス", "futon", "mattress"]):
+            if any(k in t for k in ["ダブル", "クイーン", "double", "queen"]):
+                return False
+            return True
         return False
+
+    def _title_starts_with_brand(self, title: str, brand: str) -> bool:
+        t = (title or "").strip().lower()
+        b = (brand or "").strip().lower()
+        if not t or not b:
+            return False
+        t = re.sub(r'^[\s\[\]\(\)【】「」『』\-_:|/\\]+', "", t)
+        if not t.startswith(b):
+            return False
+        if re.fullmatch(r"[a-z0-9]+", b):
+            if len(t) == len(b):
+                return True
+            return bool(re.match(rf"^{re.escape(b)}(?:[^a-z0-9]|$)", t))
+        return True
+
+    def _is_non_genuine_printer_consumable(self, text: str) -> bool:
+        t = (text or "").lower()
+        if not any(b in t for b in PRINTER_BRANDS):
+            return False
+        if not any(k in t for k in PRINTER_CONSUMABLE_HINTS):
+            return False
+        if any(g in t for g in GENUINE_HINTS):
+            return False
+        return True
 
     def _load_brands(self):
         """常時ブランドの読み込み。
@@ -3028,31 +3210,95 @@ class VineWatcher:
             pass
 
     def _brand_forced(self, title: str, byline: str = "") -> bool:
-        # 消耗品はブランド優先から除外
         text = f"{title or ''} {byline or ''}".lower()
-        for w in NG_CONSUMABLE_KEYWORDS:
-            try:
-                if str(w).lower() in text:
-                    try:
-                        if DEBUG_FIND:
-                            print(f"消耗品除外: {w}")
-                    except Exception:
-                        pass
-                    return False
-            except Exception:
-                continue
-        hay = f"{title}\n{byline}".lower()
-        for b in self.brand_always:
-            if b and str(b).lower() in hay:
+        # Canon/Epson/Panasonic の消耗品は「純正」明記が無い場合は除外
+        if self._is_non_genuine_printer_consumable(text):
+            return False
+
+        # 最優先ブランドはタイトル内ヒットで即対象（先頭一致でなくても可）
+        for b in ULTRA_PRIORITY_BRANDS:
+            if b and str(b).lower() in text:
+                return True
+
+        # 通常ブランドは「商品名の先頭一致」のみ対象
+        prefix_brands = set(self.brand_always) | set(PREFIX_PRIORITY_BRANDS)
+        for b in prefix_brands:
+            if b and self._title_starts_with_brand(title, str(b)):
                 return True
         return False
 
+    def _get_card_title_quick(self, asin: str) -> str:
+        """Vineカードからタイトルを軽量に取得（注文先行判定用）。"""
+        try:
+            card = self._find_card_locator(asin)
+            if (not card) or card.count() == 0:
+                return ""
+        except Exception:
+            return ""
+        selectors = [
+            "h1",
+            "h2",
+            "h3",
+            'a[href*="/dp/"]',
+            '[data-automation-id="product-title"]',
+            ".a-truncate-full",
+            ".a-truncate-cut",
+            "img[alt]",
+        ]
+        for sel in selectors:
+            try:
+                loc = card.locator(sel).first
+                if not loc or loc.count() == 0:
+                    continue
+                txt = ""
+                try:
+                    txt = (loc.inner_text(timeout=250) or "").strip()
+                except Exception:
+                    txt = ""
+                if (not txt) and sel == "img[alt]":
+                    try:
+                        txt = (loc.get_attribute("alt") or "").strip()
+                    except Exception:
+                        txt = ""
+                if txt:
+                    return txt
+            except Exception:
+                continue
+        return ""
+
+    def _item_priority_rank(self, title: str) -> int:
+        text = (title or "").lower()
+        if any(b in text for b in ULTRA_PRIORITY_BRANDS if b):
+            return 3
+        if self._brand_forced(title=title, byline=""):
+            return 2
+        return 1
+
     def _handle_one(self, asin: str, dp_url: str, allow_reorder: bool):
         seen_before = asin in self.db
-        title, price_text, shot, page_text, variant_prices = self._scrape_dp(dp_url or f"https://www.amazon.co.jp/dp/{asin}")
-        price_int = price_to_int(price_text)
         now_iso = datetime.datetime.now().isoformat(timespec="seconds")
         rec = self.db.get(asin) or {}
+        rec.setdefault("first_seen", now_iso)
+        rec.setdefault("url", dp_url or f"https://www.amazon.co.jp/dp/{asin}")
+
+        quick_title = self._get_card_title_quick(asin) or str(rec.get("title", "")).strip()
+        early_order_attempted = False
+
+        # 速度優先: 優先ブランドはDPスクレイプ前に注文開始
+        if getattr(self, "auto_order", bool(AUTO_ORDER)) and quick_title and self._brand_forced(title=quick_title, byline=""):
+            if allow_reorder or not rec.get("auto_ordered"):
+                early_order_attempted = True
+                ok = self._order_via_modal(asin)
+                rec["auto_ordered"] = bool(ok)
+                rec["auto_order_reason"] = "brand-early"
+                self.db[asin] = rec
+                save_db(self.db)
+                print("自動注文（ブランド先行）: 成功" if ok else "自動注文（ブランド先行）: 失敗")
+
+        title, price_text, shot, page_text, variant_prices = self._scrape_dp(dp_url or f"https://www.amazon.co.jp/dp/{asin}")
+        if not (title or "").strip():
+            title = quick_title or "No Title"
+        price_int = price_to_int(price_text)
         rec.update(
             {
                 "title": title,
@@ -3063,7 +3309,6 @@ class VineWatcher:
                 "variants": variant_prices,
             }
         )
-        rec.setdefault("first_seen", now_iso)
         self.db[asin] = rec
         save_db(self.db)
         self._last_captured_asin = asin
@@ -3076,49 +3321,66 @@ class VineWatcher:
             for vr in variant_prices:
                 print(f"  ↳ バリアント: {vr.get('label', '')} ｜ 価格: {vr.get('price', '')}")
 
+        # --- 自動注文 ---
+        if getattr(self, "auto_order", bool(AUTO_ORDER)) and (not early_order_attempted):
+            if self._brand_forced(title=title, byline=""):
+                if allow_reorder or not rec.get("auto_ordered"):
+                    ok = self._order_via_modal(asin)
+                    rec["auto_ordered"] = bool(ok)
+                    rec["auto_order_reason"] = "brand"
+                    self.db[asin] = rec
+                    save_db(self.db)
+                    print("自動注文（ブランド）: 成功" if ok else "自動注文（ブランド）: 失敗")
+            else:
+                if price_int is not None and price_int >= self.order_threshold:
+                    if self._looks_large(title, page_text):
+                        print("自動注文: 大型品推定→スキップ")
+                    else:
+                        if allow_reorder or not rec.get("auto_ordered"):
+                            ok = self._order_via_modal(asin)
+                            rec["auto_ordered"] = bool(ok)
+                            rec["auto_order_reason"] = "price"
+                            self.db[asin] = rec
+                            save_db(self.db)
+                            print("自動注文: 成功" if ok else "自動注文: 失敗")
+
         # --- 通知: 新着（初回のみ） ---
         try:
             if (not seen_before) and (not rec.get("notified_new")):
                 # --- Sheetsログ: 新着（初回のみ） ---
-                try:
-                    if not rec.get("sheet_logged"):
-                        title_s = (title or "").strip()
-                        title_l = title_s.lower()
-                        priority_brands = list(getattr(self, "brand_always", []) or [])
-                        hits = [str(b) for b in priority_brands if b and str(b).lower() in title_l]
-                        hit_brand = sorted(hits, key=len, reverse=True)[0] if hits else ""
-                        is_priority = bool(hits)
-                        res = gas_append_row(
-                            {
-                                "title": title_s,
-                                "price": (price_text or "").strip(),
-                                "asin": asin,
-                                "queue_url": URL,
-                                "brand": hit_brand,
-                                "priority": "⚡" if is_priority else "",
-                            }
-                        )
+                if not rec.get("sheet_logged"):
+                    rec["sheet_logged"] = True
+                    self.db[asin] = rec
+                    save_db(self.db)
+                    title_s = (title or "").strip()
+                    title_l = title_s.lower()
+                    priority_brands = list(getattr(self, "brand_always", []) or [])
+                    hits = [str(b) for b in priority_brands if b and str(b).lower() in title_l]
+                    hit_brand = sorted(hits, key=len, reverse=True)[0] if hits else ""
+                    is_priority = bool(hits)
+                    payload = {
+                        "title": title_s,
+                        "price": (price_text or "").strip(),
+                        "asin": asin,
+                        "queue_url": URL,
+                        "brand": hit_brand,
+                        "priority": "⚡" if is_priority else "",
+                    }
+
+                    def _sheet_job(data=payload):
+                        res = gas_append_row(data)
                         if isinstance(res, dict) and res.get("ok") is True:
-                            rec["sheet_logged"] = True
-                            if "appended" in res:
-                                rec["sheet_appended"] = bool(res.get("appended"))
-                            else:
-                                # 旧エンドポイント互換: ok=true のみ返る場合がある
-                                rec["sheet_appended"] = True
-                            rec["sheet_skipped"] = str(res.get("skipped") or "")
-                            rec["sheet_last"] = datetime.datetime.now().isoformat(timespec="seconds")
-                            save_db(self.db)
-                            if rec["sheet_appended"]:
+                            if bool(res.get("appended", True)):
                                 log_ok("Sheetsログ: 追記しました")
-                            elif rec.get("sheet_skipped") == "duplicate":
+                            elif str(res.get("skipped") or "") == "duplicate":
                                 log_info("Sheetsログ: 既に同日重複（スキップ）")
                         else:
                             if isinstance(res, dict) and str(res.get("error") or "") in ("unauthorized", "forbidden(secret)"):
                                 log_warn("Sheetsログ: SECRET不一致（unauthorized）")
-                            elif not GAS_DISABLE and GAS_WEBAPP_URL:
+                            elif (not GAS_DISABLE) and GAS_WEBAPP_URL:
                                 log_warn("Sheetsログ: 失敗（WebアプリURL/アクセス権/SECRETを確認）")
-                except Exception:
-                    pass
+
+                    run_async(_sheet_job)
 
                 msg = _fmt_tg_item_event(
                     "新着",
@@ -3140,59 +3402,44 @@ class VineWatcher:
                     max_len = 34 if is_priority else 38
                     lines[0] = f"{prefix}{p} / {title_s[:max_len]}"
                     msg = "\n".join(lines)
-                if tg_send(msg):
-                    rec["notified_new"] = True
-                    save_db(self.db)
+
+                rec["notified_new"] = True
+                self.db[asin] = rec
+                save_db(self.db)
+                tg_send_async(msg)
         except Exception:
             pass
 
         # --- 通知: 高額検知（1回だけ） ---
         try:
             if price_int is not None and price_int >= self.order_threshold and not rec.get("notified_high"):
-                if notify_high_price(
-                    asin=asin,
-                    title=title,
-                    price_text=price_text or "",
-                    dp_url=rec["url"],
-                    vine_url=URL,
-                ):
-                    rec["notified_high"] = True
-                    save_db(self.db)
+                rec["notified_high"] = True
+                self.db[asin] = rec
+                save_db(self.db)
+                run_async(
+                    lambda a=asin, t=title, p=(price_text or ""), u=rec["url"]: notify_high_price(
+                        asin=a, title=t, price_text=p, dp_url=u, vine_url=URL
+                    )
+                )
         except Exception:
             pass
-
-        # --- 自動注文 ---
-        if getattr(self, "auto_order", bool(AUTO_ORDER)):
-            if self._brand_forced(title=title, byline=""):
-                if allow_reorder or not rec.get("auto_ordered"):
-                    ok = self._order_via_modal(asin)
-                    rec["auto_ordered"] = bool(ok)
-                    save_db(self.db)
-                    print("自動注文（ブランド）: 成功" if ok else "自動注文（ブランド）: 失敗")
-            else:
-                if price_int is not None and price_int >= self.order_threshold:
-                    if self._looks_large(title, page_text):
-                        print("自動注文: 大型品推定→スキップ")
-                    else:
-                        if allow_reorder or not rec.get("auto_ordered"):
-                            ok = self._order_via_modal(asin)
-                            rec["auto_ordered"] = bool(ok)
-                            save_db(self.db)
-                            print("自動注文: 成功" if ok else "自動注文: 失敗")
 
         # --- 通知: 自動注文成功（1回だけ） ---
         try:
             if rec.get("auto_ordered") and not rec.get("notified_order"):
-                if notify_order_success(
-                    asin=asin,
-                    title=title,
-                    price_text=price_text or "",
-                    dp_url=rec["url"],
-                    vine_url=URL,
-                    reason="auto",
-                ):
-                    rec["notified_order"] = True
-                    save_db(self.db)
+                rec["notified_order"] = True
+                self.db[asin] = rec
+                save_db(self.db)
+                run_async(
+                    lambda a=asin, t=title, p=(price_text or ""), u=rec["url"]: notify_order_success(
+                        asin=a,
+                        title=t,
+                        price_text=p,
+                        dp_url=u,
+                        vine_url=URL,
+                        reason=str(rec.get("auto_order_reason") or "auto"),
+                    )
+                )
         except Exception:
             pass
 
@@ -3318,16 +3565,34 @@ class VineWatcher:
             self._debug_dump_if_empty(tag=(label or "empty"))
             return summary
 
+        # 優先度の高い商品（最優先ブランド→ブランド先頭一致）から処理する
+        try:
+            scored = []
+            for idx, it in enumerate(items):
+                asin_tmp = (it or {}).get("asin", "")
+                title_tmp = self._get_card_title_quick(asin_tmp) if asin_tmp else ""
+                rank = self._item_priority_rank(title_tmp)
+                scored.append((rank, -idx, it))
+            items = [x[2] for x in sorted(scored, key=lambda x: (x[0], x[1]), reverse=True)]
+        except Exception:
+            pass
+
         for it in items:
             try:
                 asin = (it or {}).get("asin", "")
                 dp = (it or {}).get("dp", "")
                 if not asin:
                     continue
+                is_new_record = asin not in self.db
                 is_existing = self._is_captured(asin)
                 if (ONLY_NEW and not include_existing) and is_existing:
                     summary["skipped_existing"] += 1
                     continue
+                if is_new_record:
+                    try:
+                        self._send_first_hit_today_fast(asin=asin, dp_url=(dp or f"https://www.amazon.co.jp/dp/{asin}"))
+                    except Exception:
+                        pass
                 shot_path = self._handle_one(asin, dp, allow_reorder=allow_reorder)
                 if is_existing:
                     summary["existing_processed"] += 1
@@ -3357,6 +3622,7 @@ class VineWatcher:
         self.print_banner()
 
         if not NO_BOOT_DEEP:
+            self._boot_phase = True
             try:
                 if BOOT_CATCHUP:
                     res = self._scan_once(deep=True, allow_reorder=self.allow_dup_order, include_existing=False, label="boot-deep")
@@ -3396,10 +3662,13 @@ class VineWatcher:
                     )
             except Exception:
                 log_err("起動スキャン: 検知エラー")
+            finally:
+                self._boot_phase = False
         if NO_BOOT_DEEP:
             print("起動スキャン: スキップ（NO_BOOT_DEEP=True）")
 
-        last = time.time() - self.interval
+        next_due = time.time()
+        poll_round = 0
         while self.running:
             while True:
                 try:
@@ -3437,11 +3706,13 @@ class VineWatcher:
                     self.interval = int(self.interval) + 1
                     print(f"通常間隔: {self.interval}s")
                 elif ch == "{":
-                    self.fast_interval = max(1, int(self.fast_interval) - 10)
-                    print(f"高速間隔: {self.fast_interval}s")
+                    self.fast_interval_min = max(1.0, float(self.fast_interval_min) - 0.5)
+                    self.fast_interval_max = max(self.fast_interval_min, float(self.fast_interval_max) - 0.5)
+                    print(f"高速間隔: {self.fast_interval_min:.1f}〜{self.fast_interval_max:.1f}s")
                 elif ch == "}":
-                    self.fast_interval = int(self.fast_interval) + 10
-                    print(f"高速間隔: {self.fast_interval}s")
+                    self.fast_interval_min = float(self.fast_interval_min) + 0.5
+                    self.fast_interval_max = float(self.fast_interval_max) + 0.5
+                    print(f"高速間隔: {self.fast_interval_min:.1f}〜{self.fast_interval_max:.1f}s")
                 elif ch == "g":
                     res = self._scan_once(
                         deep=False, include_existing=False, allow_reorder=self.allow_dup_order, label="manual-visible"
@@ -3576,19 +3847,26 @@ class VineWatcher:
                 continue
 
             # --- 定期スキャン（要約ログ + 間隔表示） ---
-            eff = self.fast_interval if in_fast_window(datetime.datetime.now(), self.fast_wins) else self.interval
-            if eff != getattr(self, "_current_interval_effective", eff):
-                self._current_interval_effective = eff
+            fast_now = self._is_fast_mode_now()
+            if fast_now != getattr(self, "_current_fast_mode", fast_now):
+                self._current_fast_mode = fast_now
                 try:
-                    log_interval(eff_seconds=int(eff), fast=(eff == self.fast_interval))
+                    if fast_now:
+                        log_interval(eff_seconds=f"{self.fast_interval_min:g}〜{self.fast_interval_max:g}", fast=True)
+                    else:
+                        log_interval(eff_seconds=int(self.interval), fast=False)
                 except Exception:
-                    mode = "高速" if eff == self.fast_interval else "通常"
-                    print(f"⏱ 現在の更新間隔: {eff} 秒（{mode}）")
+                    mode = "高速" if fast_now else "通常"
+                    print(f"⏱ 現在の更新間隔: {self.interval} 秒（{mode}）")
 
-            if self._force or (time.time() - last >= eff):
+            if self._force or (time.time() >= next_due):
+                force_reload = bool(self._force)
                 self._force = False
-                last = time.time()
-                self._safe_reload_vine()
+                reload_every = self.reload_every_fast if fast_now else self.reload_every_normal
+                reload_every = max(1, int(reload_every))
+                should_reload = force_reload or (poll_round % reload_every == 0)
+                if should_reload:
+                    self._safe_reload_vine()
 
                 try:
                     res = self._scan_once(deep=False, include_existing=False, allow_reorder=self.allow_dup_order, label="periodic")
@@ -3617,6 +3895,8 @@ class VineWatcher:
                         )
                 except Exception:
                     pass
+                poll_round += 1
+                next_due = time.time() + self._next_interval_seconds()
             else:
                 time.sleep(0.03)
 
