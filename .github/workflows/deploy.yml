@@ -1,0 +1,21 @@
+name: deploy
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+jobs:
+  check-secrets:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Show that OPENAI_API_KEY is available (length only)
+        env:
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+        run: |
+          if [ -z "$OPENAI_API_KEY" ]; then
+            echo "length=${#OPENAI_API_KEY}"
+            exit 1
+          fi
+          echo "OPENAI_API_KEY is set"
+          echo "length=${#OPENAI_API_KEY}"
