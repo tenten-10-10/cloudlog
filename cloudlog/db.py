@@ -10,7 +10,7 @@ from typing import Any
 
 from sitewatcher.web.auth import hash_password
 
-SCHEMA_VERSION = 1
+SCHEMA_VERSION = 2
 
 
 ROLE_ADMIN = "admin"
@@ -123,6 +123,21 @@ class TimerRow:
     started_at: int
 
 
+@dataclass(frozen=True)
+class AttendanceRow:
+    id: int
+    user_id: int
+    username: str
+    work_date: str
+    clock_in_at: int | None
+    clock_out_at: int | None
+    note: str
+    updated_by_user_id: int | None
+    updated_by_username: str | None
+    created_at: int
+    updated_at: int
+
+
 class CloudlogDB:
     def __init__(self, db_path: Path) -> None:
         self._db_path = db_path
@@ -149,7 +164,7 @@ class CloudlogDB:
         if version == 0:
             self.set_setting("schema_version", str(SCHEMA_VERSION))
             version = SCHEMA_VERSION
-        if version != SCHEMA_VERSION:
+        if version > SCHEMA_VERSION:
             raise RuntimeError(f"Unsupported schema_version={version}")
 
         self._conn.execute(
@@ -268,10 +283,51 @@ class CloudlogDB:
             """
         )
 
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS attendance_logs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              user_id INTEGER NOT NULL,
+              work_date TEXT NOT NULL,
+              clock_in_at INTEGER,
+              clock_out_at INTEGER,
+              note TEXT NOT NULL DEFAULT '',
+              created_at INTEGER NOT NULL,
+              updated_at INTEGER NOT NULL,
+              updated_by_user_id INTEGER,
+              UNIQUE(user_id, work_date),
+              FOREIGN KEY(user_id) REFERENCES users(id) ON DELETE CASCADE,
+              FOREIGN KEY(updated_by_user_id) REFERENCES users(id) ON DELETE SET NULL
+            )
+            """
+        )
+
+        self._conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS attendance_audit_logs (
+              id INTEGER PRIMARY KEY AUTOINCREMENT,
+              attendance_id INTEGER NOT NULL,
+              actor_user_id INTEGER NOT NULL,
+              action TEXT NOT NULL,
+              reason TEXT NOT NULL DEFAULT '',
+              before_json TEXT NOT NULL DEFAULT '{}',
+              after_json TEXT NOT NULL DEFAULT '{}',
+              created_at INTEGER NOT NULL,
+              FOREIGN KEY(attendance_id) REFERENCES attendance_logs(id) ON DELETE CASCADE,
+              FOREIGN KEY(actor_user_id) REFERENCES users(id) ON DELETE CASCADE
+            )
+            """
+        )
+
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_user_date ON time_entries(user_id, work_date)")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_project_date ON time_entries(project_id, work_date)")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_entries_status_date ON time_entries(status, work_date)")
         self._conn.execute("CREATE INDEX IF NOT EXISTS idx_tasks_project ON tasks(project_id)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_attendance_user_date ON attendance_logs(user_id, work_date)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_attendance_date ON attendance_logs(work_date)")
+        self._conn.execute("CREATE INDEX IF NOT EXISTS idx_attendance_audit_attendance ON attendance_audit_logs(attendance_id)")
+        if version < SCHEMA_VERSION:
+            self.set_setting("schema_version", str(SCHEMA_VERSION))
         self._conn.commit()
 
         self.ensure_bootstrap_admin()
@@ -368,6 +424,21 @@ class CloudlogDB:
             role=str(row["role"]),
             password_hash=str(row["password_hash"]),
             active=bool(row["active"]),
+        )
+
+    def _to_attendance(self, row: sqlite3.Row) -> AttendanceRow:
+        return AttendanceRow(
+            id=int(row["id"]),
+            user_id=int(row["user_id"]),
+            username=str(row["username"]),
+            work_date=str(row["work_date"]),
+            clock_in_at=int(row["clock_in_at"]) if row["clock_in_at"] is not None else None,
+            clock_out_at=int(row["clock_out_at"]) if row["clock_out_at"] is not None else None,
+            note=str(row["note"] or ""),
+            updated_by_user_id=int(row["updated_by_user_id"]) if row["updated_by_user_id"] is not None else None,
+            updated_by_username=str(row["updated_by_username"]) if row["updated_by_username"] is not None else None,
+            created_at=int(row["created_at"]),
+            updated_at=int(row["updated_at"]),
         )
 
     def get_user(self, user_id: int) -> UserRow | None:
@@ -824,6 +895,275 @@ class CloudlogDB:
             started_at=int(row["started_at"]),
         )
 
+    def _attendance_snapshot(self, row: AttendanceRow | sqlite3.Row | None) -> dict[str, Any]:
+        if row is None:
+            return {}
+        if isinstance(row, AttendanceRow):
+            return {
+                "id": row.id,
+                "user_id": row.user_id,
+                "work_date": row.work_date,
+                "clock_in_at": row.clock_in_at,
+                "clock_out_at": row.clock_out_at,
+                "note": row.note,
+                "updated_by_user_id": row.updated_by_user_id,
+            }
+        return {
+            "id": int(row["id"]),
+            "user_id": int(row["user_id"]),
+            "work_date": str(row["work_date"]),
+            "clock_in_at": int(row["clock_in_at"]) if row["clock_in_at"] is not None else None,
+            "clock_out_at": int(row["clock_out_at"]) if row["clock_out_at"] is not None else None,
+            "note": str(row["note"] or ""),
+            "updated_by_user_id": int(row["updated_by_user_id"]) if row["updated_by_user_id"] is not None else None,
+        }
+
+    def _add_attendance_audit(
+        self,
+        *,
+        attendance_id: int,
+        actor_user_id: int,
+        action: str,
+        reason: str,
+        before: dict[str, Any],
+        after: dict[str, Any],
+    ) -> None:
+        self._conn.execute(
+            """
+            INSERT INTO attendance_audit_logs(
+              attendance_id, actor_user_id, action, reason, before_json, after_json, created_at
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                int(attendance_id),
+                int(actor_user_id),
+                action,
+                reason,
+                json.dumps(before, ensure_ascii=False, separators=(",", ":")),
+                json.dumps(after, ensure_ascii=False, separators=(",", ":")),
+                now_ts(),
+            ),
+        )
+
+    def get_attendance(self, *, attendance_id: int) -> AttendanceRow | None:
+        row = self._conn.execute(
+            """
+            SELECT a.*, u.username, uu.username AS updated_by_username
+            FROM attendance_logs a
+            JOIN users u ON u.id=a.user_id
+            LEFT JOIN users uu ON uu.id=a.updated_by_user_id
+            WHERE a.id=?
+            LIMIT 1
+            """,
+            (int(attendance_id),),
+        ).fetchone()
+        if not row:
+            return None
+        return self._to_attendance(row)
+
+    def get_attendance_by_user_date(self, *, user_id: int, work_date: str) -> AttendanceRow | None:
+        row = self._conn.execute(
+            """
+            SELECT a.*, u.username, uu.username AS updated_by_username
+            FROM attendance_logs a
+            JOIN users u ON u.id=a.user_id
+            LEFT JOIN users uu ON uu.id=a.updated_by_user_id
+            WHERE a.user_id=? AND a.work_date=?
+            LIMIT 1
+            """,
+            (int(user_id), work_date),
+        ).fetchone()
+        if not row:
+            return None
+        return self._to_attendance(row)
+
+    def clock_in(self, *, user_id: int, work_date: str, at_ts: int) -> AttendanceRow:
+        row = self._conn.execute(
+            "SELECT * FROM attendance_logs WHERE user_id=? AND work_date=? LIMIT 1",
+            (int(user_id), work_date),
+        ).fetchone()
+        if row and row["clock_in_at"] is not None:
+            raise ValueError("already_clocked_in")
+        if row and row["clock_out_at"] is not None:
+            raise ValueError("already_clocked_out")
+
+        before = self._attendance_snapshot(row)
+        ts = now_ts()
+        if row is None:
+            cur = self._conn.execute(
+                """
+                INSERT INTO attendance_logs(
+                  user_id, work_date, clock_in_at, clock_out_at, note,
+                  created_at, updated_at, updated_by_user_id
+                ) VALUES (?, ?, ?, NULL, '', ?, ?, NULL)
+                """,
+                (int(user_id), work_date, int(at_ts), ts, ts),
+            )
+            attendance_id = int(cur.lastrowid)
+        else:
+            attendance_id = int(row["id"])
+            self._conn.execute(
+                """
+                UPDATE attendance_logs
+                SET clock_in_at=?, updated_at=?, updated_by_user_id=NULL
+                WHERE id=?
+                """,
+                (int(at_ts), ts, attendance_id),
+            )
+
+        attendance = self.get_attendance(attendance_id=attendance_id)
+        if attendance is None:
+            raise RuntimeError("attendance_not_found_after_clock_in")
+        self._add_attendance_audit(
+            attendance_id=attendance.id,
+            actor_user_id=int(user_id),
+            action="clock_in",
+            reason="",
+            before=before,
+            after=self._attendance_snapshot(attendance),
+        )
+        self._conn.commit()
+        return attendance
+
+    def clock_out(self, *, user_id: int, work_date: str, at_ts: int) -> AttendanceRow:
+        row = self._conn.execute(
+            "SELECT * FROM attendance_logs WHERE user_id=? AND work_date=? LIMIT 1",
+            (int(user_id), work_date),
+        ).fetchone()
+        if row is None or row["clock_in_at"] is None:
+            raise ValueError("clock_in_required")
+        if row["clock_out_at"] is not None:
+            raise ValueError("already_clocked_out")
+
+        before = self._attendance_snapshot(row)
+        attendance_id = int(row["id"])
+        ts = now_ts()
+        self._conn.execute(
+            """
+            UPDATE attendance_logs
+            SET clock_out_at=?, updated_at=?, updated_by_user_id=NULL
+            WHERE id=?
+            """,
+            (int(at_ts), ts, attendance_id),
+        )
+        attendance = self.get_attendance(attendance_id=attendance_id)
+        if attendance is None:
+            raise RuntimeError("attendance_not_found_after_clock_out")
+        self._add_attendance_audit(
+            attendance_id=attendance.id,
+            actor_user_id=int(user_id),
+            action="clock_out",
+            reason="",
+            before=before,
+            after=self._attendance_snapshot(attendance),
+        )
+        self._conn.commit()
+        return attendance
+
+    def list_attendance(
+        self,
+        *,
+        user_id: int | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> list[AttendanceRow]:
+        sql = """
+            SELECT a.*, u.username, uu.username AS updated_by_username
+            FROM attendance_logs a
+            JOIN users u ON u.id=a.user_id
+            LEFT JOIN users uu ON uu.id=a.updated_by_user_id
+        """
+        clauses: list[str] = []
+        args: list[Any] = []
+        if user_id is not None:
+            clauses.append("a.user_id=?")
+            args.append(int(user_id))
+        if from_date:
+            clauses.append("a.work_date>=?")
+            args.append(from_date)
+        if to_date:
+            clauses.append("a.work_date<=?")
+            args.append(to_date)
+        if clauses:
+            sql += " WHERE " + " AND ".join(clauses)
+        sql += " ORDER BY a.work_date DESC, u.username ASC, a.id DESC"
+        rows = self._conn.execute(sql, tuple(args)).fetchall()
+        return [self._to_attendance(row) for row in rows]
+
+    def attendance_summary(self, *, user_id: int, from_date: str, to_date: str) -> dict[str, Any]:
+        row = self._conn.execute(
+            """
+            SELECT
+              COALESCE(SUM(
+                CASE
+                  WHEN clock_in_at IS NOT NULL AND clock_out_at IS NOT NULL AND clock_out_at >= clock_in_at
+                  THEN (clock_out_at - clock_in_at)
+                  ELSE 0
+                END
+              ), 0) AS total_seconds,
+              COALESCE(SUM(CASE WHEN clock_in_at IS NOT NULL THEN 1 ELSE 0 END), 0) AS worked_days
+            FROM attendance_logs
+            WHERE user_id=? AND work_date>=? AND work_date<=?
+            """,
+            (int(user_id), from_date, to_date),
+        ).fetchone()
+        return {
+            "total_seconds": int(row["total_seconds"] or 0),
+            "worked_days": int(row["worked_days"] or 0),
+        }
+
+    def admin_update_attendance(
+        self,
+        *,
+        attendance_id: int,
+        actor_user_id: int,
+        clock_in_at: int | None,
+        clock_out_at: int | None,
+        note: str,
+        reason: str,
+    ) -> AttendanceRow:
+        if not str(reason or "").strip():
+            raise ValueError("reason_required")
+        if clock_in_at is None and clock_out_at is not None:
+            raise ValueError("clock_in_required")
+        if clock_in_at is not None and clock_out_at is not None and int(clock_out_at) < int(clock_in_at):
+            raise ValueError("clock_out_must_be_after_clock_in")
+
+        row = self._conn.execute("SELECT * FROM attendance_logs WHERE id=? LIMIT 1", (int(attendance_id),)).fetchone()
+        if row is None:
+            raise ValueError("attendance_not_found")
+
+        before = self._attendance_snapshot(row)
+        ts = now_ts()
+        self._conn.execute(
+            """
+            UPDATE attendance_logs
+            SET clock_in_at=?, clock_out_at=?, note=?, updated_by_user_id=?, updated_at=?
+            WHERE id=?
+            """,
+            (
+                int(clock_in_at) if clock_in_at is not None else None,
+                int(clock_out_at) if clock_out_at is not None else None,
+                note,
+                int(actor_user_id),
+                ts,
+                int(attendance_id),
+            ),
+        )
+        attendance = self.get_attendance(attendance_id=int(attendance_id))
+        if attendance is None:
+            raise RuntimeError("attendance_not_found_after_update")
+        self._add_attendance_audit(
+            attendance_id=attendance.id,
+            actor_user_id=int(actor_user_id),
+            action="admin_update",
+            reason=reason,
+            before=before,
+            after=self._attendance_snapshot(attendance),
+        )
+        self._conn.commit()
+        return attendance
+
     def project_report(self, *, from_date: str, to_date: str, user_id: int | None = None) -> list[dict[str, Any]]:
         sql = """
             SELECT
@@ -1059,5 +1399,6 @@ class CloudlogDB:
             "projects": [p.__dict__ for p in self.list_projects(include_archived=True)],
             "tasks": [t.__dict__ for t in self.list_tasks(active_only=False)],
             "entries": [e.__dict__ for e in self.list_entries()],
+            "attendance": [a.__dict__ for a in self.list_attendance()],
         }
         return json.dumps(data, ensure_ascii=False, separators=(",", ":"))

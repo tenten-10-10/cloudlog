@@ -1,0 +1,102 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="row spread wrap">
+    <h1>出退勤打刻</h1>
+    <p class="hint">サーバー時刻基準（JST）</p>
+  </div>
+
+  {% if flash_error %}
+  <p class="error">{{ flash_error }}</p>
+  {% endif %}
+  {% if flash_message %}
+  <p class="notice">{{ flash_message }}</p>
+  {% endif %}
+
+  <div class="cards">
+    <article class="card">
+      <h2>今日の状態</h2>
+      <p>{{ today_status }}</p>
+    </article>
+    <article class="card">
+      <h2>今月の総労働時間</h2>
+      <p>{{ month_worked_hours }}h</p>
+    </article>
+    <article class="card">
+      <h2>今月の出勤日数</h2>
+      <p>{{ month_worked_days }}日</p>
+    </article>
+  </div>
+
+  <div class="row wrap attendance-actions">
+    <form method="post" action="/attendance/clock-in" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <button class="btn btn--success" type="submit" {% if not can_clock_in %}disabled{% endif %}>出勤打刻</button>
+    </form>
+
+    <form method="post" action="/attendance/clock-out" class="inline-form">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <button class="btn btn--danger" type="submit" {% if not can_clock_out %}disabled{% endif %}>退勤打刻</button>
+    </form>
+  </div>
+
+  <dl class="attendance-status-grid">
+    <div>
+      <dt>出勤時刻</dt>
+      <dd>{{ fmt_ts_jst(today_log.clock_in_at if today_log else none) }}</dd>
+    </div>
+    <div>
+      <dt>退勤時刻</dt>
+      <dd>{{ fmt_ts_jst(today_log.clock_out_at if today_log else none) }}</dd>
+    </div>
+  </dl>
+</section>
+
+<section class="panel">
+  <h2>自分の打刻履歴</h2>
+
+  <form method="get" action="/attendance" class="inline-form wrap attendance-filter">
+    <label>プリセット
+      <select name="preset">
+        <option value="this-month" {% if preset == "this-month" %}selected{% endif %}>今月</option>
+        <option value="last-month" {% if preset == "last-month" %}selected{% endif %}>先月</option>
+        <option value="custom" {% if preset == "custom" %}selected{% endif %}>任意期間</option>
+      </select>
+    </label>
+    <label>開始日
+      <input type="date" name="from_date" value="{{ from_date }}" />
+    </label>
+    <label>終了日
+      <input type="date" name="to_date" value="{{ to_date }}" />
+    </label>
+    <button class="btn" type="submit">表示</button>
+  </form>
+
+  <table>
+    <thead>
+      <tr>
+        <th>日付</th>
+        <th>出勤時刻</th>
+        <th>退勤時刻</th>
+        <th>労働時間(h)</th>
+        <th>備考</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in history %}
+      <tr>
+        <td>{{ item.row.work_date }}</td>
+        <td>{{ fmt_ts_jst(item.row.clock_in_at) }}</td>
+        <td>{{ fmt_ts_jst(item.row.clock_out_at) }}</td>
+        <td>{{ item.worked_hours }}</td>
+        <td>{{ item.row.note or "-" }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="5">履歴がありません</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
