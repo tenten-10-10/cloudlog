@@ -198,6 +198,7 @@
 <section class="panel">
   <h2>CSV取り込み</h2>
   <form method="post" action="/import/entries.csv" enctype="multipart/form-data" class="inline-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
     <input type="file" name="file" accept=".csv" required />
     <button class="btn" type="submit">取り込み</button>
   </form>

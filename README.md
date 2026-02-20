@@ -130,6 +130,7 @@ launchctl unload -w ~/Library/LaunchAgents/com.example.sitewatcher.plist
 主な機能:
 
 - 日次/週次の工数入力（手入力 + タイマー）
+- 出退勤打刻（出勤/退勤・履歴・管理者修正）
 - 工数申請/承認/差し戻しワークフロー
 - 案件・顧客・タスク管理
 - 予実管理（案件別工数・原価・売上・損益）

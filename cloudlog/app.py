@@ -7,7 +7,7 @@ import os
 import secrets
 import time
 from collections import defaultdict
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
@@ -22,6 +22,7 @@ from starlette.middleware.trustedhost import TrustedHostMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
 from cloudlog.db import (
+    AttendanceRow,
     ROLE_ADMIN,
     ROLE_MANAGER,
     ROLE_MEMBER,
@@ -45,6 +46,7 @@ from sitewatcher.web.auth import (
 
 
 log = logging.getLogger("cloudlog")
+JST = timezone(timedelta(hours=9))
 
 
 def _resolve_data_dir() -> Path:
@@ -129,6 +131,58 @@ def _role_at_least(role: str, minimum_role: str) -> bool:
     return ROLE_ORDER.get(role, 0) >= ROLE_ORDER.get(minimum_role, 0)
 
 
+def _jst_now() -> datetime:
+    return datetime.now(tz=JST)
+
+
+def _jst_today() -> date:
+    return _jst_now().date()
+
+
+def _jst_today_iso() -> str:
+    return _jst_today().isoformat()
+
+
+def _fmt_ts_jst(ts: int | None) -> str:
+    if ts is None:
+        return "-"
+    return datetime.fromtimestamp(int(ts), tz=JST).strftime("%Y-%m-%d %H:%M:%S JST")
+
+
+def _to_datetime_local(ts: int | None) -> str:
+    if ts is None:
+        return ""
+    return datetime.fromtimestamp(int(ts), tz=JST).strftime("%Y-%m-%dT%H:%M")
+
+
+def _parse_datetime_local(raw: str | None) -> int | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    dt = datetime.strptime(text, "%Y-%m-%dT%H:%M").replace(tzinfo=JST)
+    return int(dt.timestamp())
+
+
+def _worked_seconds(row: AttendanceRow) -> int:
+    if row.clock_in_at is None or row.clock_out_at is None:
+        return 0
+    if row.clock_out_at < row.clock_in_at:
+        return 0
+    return int(row.clock_out_at - row.clock_in_at)
+
+
+def _fmt_seconds_as_hours(seconds: int) -> str:
+    return f"{(max(0, int(seconds)) / 3600.0):.2f}"
+
+
+def _attendance_status(row: AttendanceRow | None) -> str:
+    if row is None or row.clock_in_at is None:
+        return "未出勤"
+    if row.clock_out_at is None:
+        return "出勤済"
+    return "退勤済"
+
+
 def _parse_hours(raw: str | None) -> float:
     if raw is None:
         return 0.0
@@ -190,6 +244,7 @@ app.add_middleware(
     secret_key=_session_secret,
     session_cookie="cloudlog_session",
     https_only=_https,
+    same_site="lax",
 )
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
 
@@ -293,6 +348,9 @@ def _render(request: Request, name: str, context: dict[str, Any], *, status_code
         "ROLE_MANAGER": ROLE_MANAGER,
         "ROLE_MEMBER": ROLE_MEMBER,
         "fmt_hours": _fmt_hours,
+        "fmt_ts_jst": _fmt_ts_jst,
+        "fmt_seconds_as_hours": _fmt_seconds_as_hours,
+        "to_datetime_local": _to_datetime_local,
         **context,
     }
     return templates.TemplateResponse(name, merged, status_code=status_code)
@@ -406,6 +464,239 @@ def dashboard(request: Request, month: str | None = None):
             "elapsed_minutes": elapsed_minutes,
         },
     )
+
+
+@app.get("/attendance/today")
+def attendance_today(request: Request):
+    user = _require_user(request)
+    today = _jst_today_iso()
+    row = DB.get_attendance_by_user_date(user_id=user.id, work_date=today)
+    status = _attendance_status(row)
+    return {
+        "ok": True,
+        "date": today,
+        "status": status,
+        "clock_in_at": row.clock_in_at if row else None,
+        "clock_out_at": row.clock_out_at if row else None,
+        "clock_in_at_jst": _fmt_ts_jst(row.clock_in_at) if row else "-",
+        "clock_out_at_jst": _fmt_ts_jst(row.clock_out_at) if row else "-",
+    }
+
+
+@app.get("/attendance", response_class=HTMLResponse)
+def attendance_page(
+    request: Request,
+    preset: str = "this-month",
+    from_date: str | None = None,
+    to_date: str | None = None,
+):
+    user = _require_user(request)
+    today = _jst_today()
+
+    this_month_first, this_month_last = _month_bounds(today)
+    last_month_first, last_month_last = _month_bounds(this_month_first - timedelta(days=1))
+
+    if from_date and to_date:
+        range_from = _to_date(from_date, this_month_first)
+        range_to = _to_date(to_date, this_month_last)
+    elif preset == "last-month":
+        range_from = last_month_first
+        range_to = last_month_last
+    else:
+        range_from = this_month_first
+        range_to = this_month_last
+
+    today_key = today.isoformat()
+    today_log = DB.get_attendance_by_user_date(user_id=user.id, work_date=today_key)
+    today_status = _attendance_status(today_log)
+
+    rows = DB.list_attendance(
+        user_id=user.id,
+        from_date=range_from.isoformat(),
+        to_date=range_to.isoformat(),
+    )
+    history: list[dict[str, Any]] = []
+    for row in rows:
+        seconds = _worked_seconds(row)
+        history.append(
+            {
+                "row": row,
+                "worked_seconds": seconds,
+                "worked_hours": _fmt_seconds_as_hours(seconds),
+            }
+        )
+
+    month_summary = DB.attendance_summary(
+        user_id=user.id,
+        from_date=this_month_first.isoformat(),
+        to_date=this_month_last.isoformat(),
+    )
+
+    can_clock_in = today_status == "未出勤"
+    can_clock_out = today_status == "出勤済"
+
+    return _render(
+        request,
+        "attendance.html",
+        {
+            "title": "打刻",
+            "today_status": today_status,
+            "today_log": today_log,
+            "can_clock_in": can_clock_in,
+            "can_clock_out": can_clock_out,
+            "history": history,
+            "from_date": range_from.isoformat(),
+            "to_date": range_to.isoformat(),
+            "preset": preset,
+            "month_worked_days": month_summary["worked_days"],
+            "month_worked_hours": _fmt_seconds_as_hours(month_summary["total_seconds"]),
+            "flash_error": str(request.query_params.get("error", "") or ""),
+            "flash_message": str(request.query_params.get("msg", "") or ""),
+        },
+    )
+
+
+@app.post("/attendance/clock-in")
+async def attendance_clock_in(request: Request):
+    user = _require_user(request)
+    form = await request.form()
+    csrf_token = str(form.get("csrf_token", "") or "")
+    redirect = _validate_csrf_or_redirect(request, csrf_token, "/attendance")
+    if redirect:
+        return redirect
+
+    work_date = _jst_today_iso()
+    try:
+        DB.clock_in(user_id=user.id, work_date=work_date, at_ts=int(_jst_now().timestamp()))
+    except ValueError as e:
+        code = str(e)
+        if code == "already_clocked_in":
+            return RedirectResponse(url="/attendance?error=既に出勤打刻済みです", status_code=303)
+        if code == "already_clocked_out":
+            return RedirectResponse(url="/attendance?error=本日は既に退勤済みです", status_code=303)
+        return RedirectResponse(url="/attendance?error=出勤打刻に失敗しました", status_code=303)
+
+    return RedirectResponse(url="/attendance?msg=出勤打刻しました", status_code=303)
+
+
+@app.post("/attendance/clock-out")
+async def attendance_clock_out(request: Request):
+    user = _require_user(request)
+    form = await request.form()
+    csrf_token = str(form.get("csrf_token", "") or "")
+    redirect = _validate_csrf_or_redirect(request, csrf_token, "/attendance")
+    if redirect:
+        return redirect
+
+    work_date = _jst_today_iso()
+    try:
+        DB.clock_out(user_id=user.id, work_date=work_date, at_ts=int(_jst_now().timestamp()))
+    except ValueError as e:
+        code = str(e)
+        if code == "clock_in_required":
+            return RedirectResponse(url="/attendance?error=出勤前に退勤打刻はできません", status_code=303)
+        if code == "already_clocked_out":
+            return RedirectResponse(url="/attendance?error=既に退勤打刻済みです", status_code=303)
+        return RedirectResponse(url="/attendance?error=退勤打刻に失敗しました", status_code=303)
+
+    return RedirectResponse(url="/attendance?msg=退勤打刻しました", status_code=303)
+
+
+@app.get("/admin/attendance", response_class=HTMLResponse)
+def admin_attendance_page(
+    request: Request,
+    from_date: str | None = None,
+    to_date: str | None = None,
+    user_id: int | None = None,
+):
+    _require_role(request, ROLE_ADMIN)
+    today = _jst_today()
+    month_first, month_last = _month_bounds(today)
+
+    range_from = _to_date(from_date, month_first).isoformat()
+    range_to = _to_date(to_date, month_last).isoformat()
+    selected_user_id = int(user_id) if user_id else None
+
+    rows = DB.list_attendance(
+        user_id=selected_user_id,
+        from_date=range_from,
+        to_date=range_to,
+    )
+    history: list[dict[str, Any]] = []
+    for row in rows:
+        seconds = _worked_seconds(row)
+        history.append(
+            {
+                "row": row,
+                "worked_seconds": seconds,
+                "worked_hours": _fmt_seconds_as_hours(seconds),
+            }
+        )
+
+    return _render(
+        request,
+        "admin_attendance.html",
+        {
+            "title": "打刻管理",
+            "users": DB.list_users(active_only=True),
+            "selected_user_id": selected_user_id,
+            "from_date": range_from,
+            "to_date": range_to,
+            "history": history,
+            "flash_error": str(request.query_params.get("error", "") or ""),
+            "flash_message": str(request.query_params.get("msg", "") or ""),
+        },
+    )
+
+
+@app.post("/admin/attendance/{attendance_id}")
+async def admin_attendance_update(request: Request, attendance_id: int):
+    admin = _require_role(request, ROLE_ADMIN)
+    form = await request.form()
+    csrf_token = str(form.get("csrf_token", "") or "")
+    redirect = _validate_csrf_or_redirect(request, csrf_token, "/admin/attendance")
+    if redirect:
+        return redirect
+
+    from_date = str(form.get("from_date", "") or "").strip()
+    to_date = str(form.get("to_date", "") or "").strip()
+    user_id = str(form.get("user_id", "") or "").strip()
+    query_suffix = f"from_date={quote(from_date)}&to_date={quote(to_date)}"
+    if user_id:
+        query_suffix += f"&user_id={quote(user_id)}"
+
+    reason = str(form.get("reason", "") or "").strip()
+    note = str(form.get("note", "") or "").strip()
+    try:
+        clock_in_at = _parse_datetime_local(str(form.get("clock_in_at", "") or ""))
+        clock_out_at = _parse_datetime_local(str(form.get("clock_out_at", "") or ""))
+    except ValueError:
+        return RedirectResponse(url=f"/admin/attendance?{query_suffix}&error={quote('日時フォーマットが不正です')}", status_code=303)
+
+    try:
+        DB.admin_update_attendance(
+            attendance_id=attendance_id,
+            actor_user_id=admin.id,
+            clock_in_at=clock_in_at,
+            clock_out_at=clock_out_at,
+            note=note,
+            reason=reason,
+        )
+    except ValueError as e:
+        code = str(e)
+        if code == "reason_required":
+            msg = "修正理由は必須です"
+        elif code == "clock_in_required":
+            msg = "出勤時刻なしで退勤時刻のみは設定できません"
+        elif code == "clock_out_must_be_after_clock_in":
+            msg = "退勤時刻は出勤時刻より後に設定してください"
+        elif code == "attendance_not_found":
+            msg = "対象の打刻が見つかりません"
+        else:
+            msg = "打刻修正に失敗しました"
+        return RedirectResponse(url=f"/admin/attendance?{query_suffix}&error={quote(msg)}", status_code=303)
+
+    return RedirectResponse(url=f"/admin/attendance?{query_suffix}&msg=打刻を修正しました", status_code=303)
 
 
 @app.get("/entries", response_class=HTMLResponse)

@@ -83,6 +83,17 @@ code {
   justify-content: center;
   gap: 0.8rem;
   font-size: 0.95rem;
+  row-gap: 0.45rem;
+}
+
+.nav a {
+  padding: 0.18rem 0.15rem;
+  border-bottom: 2px solid transparent;
+}
+
+.nav a:hover {
+  border-bottom-color: #9dc7dd;
+  text-decoration: none;
 }
 
 .actions {
@@ -264,6 +275,11 @@ textarea {
   text-decoration: none;
 }
 
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
 .btn--ghost {
   background: #fff;
   color: var(--brand);
@@ -300,6 +316,37 @@ textarea {
 .hint {
   color: var(--muted);
   font-size: 0.84rem;
+}
+
+.attendance-actions {
+  margin-top: 0.9rem;
+}
+
+.attendance-status-grid {
+  margin: 0.9rem 0 0;
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 0.8rem;
+}
+
+.attendance-status-grid dt {
+  font-size: 0.82rem;
+  color: var(--muted);
+  margin-bottom: 0.2rem;
+}
+
+.attendance-status-grid dd {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+}
+
+.attendance-filter {
+  margin-bottom: 0.9rem;
+}
+
+.admin-attendance-form {
+  min-width: min(92vw, 650px);
 }
 
 .loss {
@@ -405,6 +452,7 @@ summary {
 
   .nav {
     justify-content: start;
+    font-size: 0.9rem;
   }
 
   .inline-form {
