@@ -1176,6 +1176,7 @@ main.shell {
   color: #113b26;
   font-weight: 800;
   text-shadow: 0 10px 22px rgba(17, 76, 46, 0.14);
+  white-space: nowrap;
 }
 
 .clock-subtext {
@@ -1518,20 +1519,39 @@ body.drawer-open {
 
 @media (min-width: 1024px) {
   .today-hero__grid {
-    grid-template-columns: minmax(540px, 1.26fr) minmax(340px, 0.86fr);
+    grid-template-columns: minmax(620px, 1.65fr) minmax(300px, 0.85fr);
     gap: 0.96rem;
   }
 
   .clock-hero-row {
-    grid-template-columns: 1fr minmax(210px, 280px);
-    align-items: end;
+    grid-template-columns: minmax(0, 1fr) minmax(220px, 280px);
+    align-items: center;
     gap: 0.9rem;
+  }
+
+  .live-clock--hero {
+    font-size: clamp(2.9rem, 5vw, 4.2rem);
   }
 }
 
 @media (max-width: 1023px) {
   .kpi-strip {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1320px) and (min-width: 1024px) {
+  .today-hero__grid {
+    grid-template-columns: minmax(0, 1.48fr) minmax(290px, 0.86fr);
+  }
+
+  .clock-hero-row {
+    grid-template-columns: 1fr;
+    gap: 0.7rem;
+  }
+
+  .primary-clock-form {
+    max-width: 440px;
   }
 }
 
