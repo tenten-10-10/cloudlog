@@ -1,70 +1,66 @@
 from __future__ import annotations
 
 import csv
+import hmac
 import io
+import json
 import logging
 import os
 import secrets
-import time
-from collections import defaultdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 from urllib.parse import quote
 
-import requests
-from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse, RedirectResponse, StreamingResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
+from itsdangerous import BadData, URLSafeTimedSerializer
 from starlette.middleware.sessions import SessionMiddleware
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 from uvicorn.middleware.proxy_headers import ProxyHeadersMiddleware
 
-from cloudlog.db import (
-    AttendanceRow,
+from cloudlog.timeclock_store import (
+    EVENT_IN,
+    EVENT_OUT,
+    EVENT_OUTING,
+    EVENT_RETURN,
+    LEAVE_COMPANY_DESIGNATED,
+    LEAVE_OTHER,
+    LEAVE_PAID,
+    LEAVE_SPECIAL,
     ROLE_ADMIN,
-    ROLE_MANAGER,
-    ROLE_MEMBER,
     ROLE_ORDER,
-    STATUS_APPROVED,
-    STATUS_DRAFT,
-    STATUS_REJECTED,
-    STATUS_SUBMITTED,
-    CloudlogDB,
-)
-from sitewatcher.web.auth import (
-    ensure_csrf_token,
-    get_user_id,
-    get_username,
-    hash_password,
-    login_session,
-    logout_session,
-    validate_csrf,
-    verify_password,
+    TimeclockStore,
 )
 
 
 log = logging.getLogger("cloudlog")
 JST = timezone(timedelta(hours=9))
 
-
-def _resolve_data_dir() -> Path:
-    raw = os.getenv("CLOUDLOG_DATA_DIR", ".cloudlog")
-    p = Path(raw)
-    if not p.is_absolute():
-        p = (Path.cwd() / p).resolve()
-    return p
+SESSION_USER_ID_KEY = "cloudlog_user_id"
+SESSION_USER_EMAIL_KEY = "cloudlog_user_email"
+SESSION_CSRF_KEY = "cloudlog_csrf"
 
 
-def _allow_registration() -> bool:
-    raw = (os.getenv("CLOUDLOG_ALLOW_REGISTRATION", "1") or "1").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+def _jst_now() -> datetime:
+    return datetime.now(tz=JST)
 
 
-def _https_only() -> bool:
-    raw = (os.getenv("CLOUDLOG_HTTPS_ONLY", "0") or "0").strip().lower()
-    return raw in {"1", "true", "yes", "on"}
+def _jst_today() -> date:
+    return _jst_now().date()
+
+
+def _resolve_templates() -> Jinja2Templates:
+    return Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
+
+
+def _parse_bool(raw: str | None, default: bool = False) -> bool:
+    text = str(raw or "").strip().lower()
+    if not text:
+        return default
+    return text in {"1", "true", "yes", "on"}
 
 
 def _parse_allowed_hosts(raw: str) -> list[str]:
@@ -74,9 +70,7 @@ def _parse_allowed_hosts(raw: str) -> list[str]:
         if part == "*":
             continue
         out.append(part)
-    if not out:
-        return ["localhost", "127.0.0.1"]
-    return out
+    return out or ["localhost", "127.0.0.1"]
 
 
 def _parse_trusted_proxies(raw: str) -> list[str] | str:
@@ -89,162 +83,144 @@ def _parse_trusted_proxies(raw: str) -> list[str] | str:
 
 def _safe_next(next_path: str | None) -> str:
     if not next_path:
-        return "/"
+        return "/today"
     p = str(next_path).strip()
     if not p.startswith("/"):
-        return "/"
+        return "/today"
     if p.startswith("//"):
-        return "/"
+        return "/today"
     if "://" in p:
-        return "/"
+        return "/today"
     return p
 
 
-def _to_date(value: str | None, default: date) -> date:
-    if not value:
+def _session_user_id(session: dict[str, Any]) -> str | None:
+    raw = session.get(SESSION_USER_ID_KEY)
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    return value or None
+
+
+def _session_user_email(session: dict[str, Any]) -> str | None:
+    raw = session.get(SESSION_USER_EMAIL_KEY)
+    if raw is None:
+        return None
+    value = str(raw).strip()
+    return value or None
+
+
+def _login_session(session: dict[str, Any], *, user_id: str, email: str) -> None:
+    session[SESSION_USER_ID_KEY] = user_id
+    session[SESSION_USER_EMAIL_KEY] = email
+    _ensure_csrf_token(session)
+
+
+def _logout_session(session: dict[str, Any]) -> None:
+    session.pop(SESSION_USER_ID_KEY, None)
+    session.pop(SESSION_USER_EMAIL_KEY, None)
+
+
+def _ensure_csrf_token(session: dict[str, Any]) -> str:
+    token = session.get(SESSION_CSRF_KEY)
+    if isinstance(token, str) and token:
+        return token
+    token = secrets.token_urlsafe(32)
+    session[SESSION_CSRF_KEY] = token
+    return token
+
+
+def _validate_csrf(session: dict[str, Any], token: str | None) -> bool:
+    expected = session.get(SESSION_CSRF_KEY)
+    if not isinstance(expected, str) or not expected:
+        return False
+    if not token:
+        return False
+    return hmac.compare_digest(expected, str(token))
+
+
+def _fmt_hhmm(dt_iso: str) -> str:
+    if not dt_iso:
+        return ""
+    try:
+        dt = datetime.fromisoformat(dt_iso)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=JST)
+        return dt.astimezone(JST).strftime("%H:%M")
+    except Exception:
+        return ""
+
+
+def _fmt_hhmm_dt(dt: datetime | None) -> str:
+    if dt is None:
+        return ""
+    return dt.astimezone(JST).strftime("%H:%M")
+
+
+def _parse_datetime_local(raw: str | None) -> datetime | None:
+    text = str(raw or "").strip()
+    if not text:
+        return None
+    dt = datetime.strptime(text, "%Y-%m-%dT%H:%M")
+    return dt.replace(tzinfo=JST)
+
+
+def _parse_date(raw: str | None, default: date) -> date:
+    text = str(raw or "").strip()
+    if not text:
         return default
     try:
-        return date.fromisoformat(str(value))
+        return date.fromisoformat(text)
     except ValueError:
         return default
 
 
-def _fmt_hours(hours: float) -> str:
-    return f"{hours:.2f}"
-
-
-def _month_bounds(base: date) -> tuple[date, date]:
-    first = base.replace(day=1)
-    if first.month == 12:
-        next_month = date(first.year + 1, 1, 1)
-    else:
-        next_month = date(first.year, first.month + 1, 1)
-    return first, next_month - timedelta(days=1)
-
-
-def _week_bounds(base: date) -> tuple[date, date]:
-    start = base - timedelta(days=base.weekday())
-    return start, start + timedelta(days=6)
-
-
-def _role_at_least(role: str, minimum_role: str) -> bool:
-    return ROLE_ORDER.get(role, 0) >= ROLE_ORDER.get(minimum_role, 0)
-
-
-def _jst_now() -> datetime:
-    return datetime.now(tz=JST)
-
-
-def _jst_today() -> date:
-    return _jst_now().date()
-
-
-def _jst_today_iso() -> str:
-    return _jst_today().isoformat()
-
-
-def _fmt_ts_jst(ts: int | None) -> str:
-    if ts is None:
-        return "-"
-    return datetime.fromtimestamp(int(ts), tz=JST).strftime("%Y-%m-%d %H:%M:%S JST")
-
-
-def _to_datetime_local(ts: int | None) -> str:
-    if ts is None:
-        return ""
-    return datetime.fromtimestamp(int(ts), tz=JST).strftime("%Y-%m-%dT%H:%M")
-
-
-def _parse_datetime_local(raw: str | None) -> int | None:
+def _parse_month(raw: str | None, default: date) -> str:
     text = str(raw or "").strip()
     if not text:
-        return None
-    dt = datetime.strptime(text, "%Y-%m-%dT%H:%M").replace(tzinfo=JST)
-    return int(dt.timestamp())
-
-
-def _worked_seconds(row: AttendanceRow) -> int:
-    if row.clock_in_at is None or row.clock_out_at is None:
-        return 0
-    if row.clock_out_at < row.clock_in_at:
-        return 0
-    return int(row.clock_out_at - row.clock_in_at)
-
-
-def _fmt_seconds_as_hours(seconds: int) -> str:
-    return f"{(max(0, int(seconds)) / 3600.0):.2f}"
-
-
-def _attendance_status(row: AttendanceRow | None) -> str:
-    if row is None or row.clock_in_at is None:
-        return "未出勤"
-    if row.clock_out_at is None:
-        return "出勤済"
-    return "退勤済"
-
-
-def _parse_hours(raw: str | None) -> float:
-    if raw is None:
-        return 0.0
-    text = str(raw).strip()
-    if not text:
-        return 0.0
-    return max(0.0, float(text))
-
-
-def _minutes_from_hours(raw: str | None) -> int:
-    hours = _parse_hours(raw)
-    return int(round(hours * 60.0))
-
-
-def _api_error(message: str, code: int = 400) -> JSONResponse:
-    return JSONResponse(status_code=code, content={"ok": False, "error": message})
-
-
-def _notify_webhook(db: CloudlogDB, *, event: str, payload: dict[str, Any]) -> None:
-    url = db.get_setting("webhook_url", "").strip()
-    if not url:
-        return
+        return default.strftime("%Y-%m")
     try:
-        requests.post(
-            url,
-            json={
-                "event": event,
-                "timestamp": int(time.time()),
-                "payload": payload,
-            },
-            timeout=4,
-        )
-    except Exception:
-        log.exception("Failed to call webhook: %s", event)
+        datetime.strptime(text + "-01", "%Y-%m-%d")
+        return text
+    except ValueError:
+        return default.strftime("%Y-%m")
 
 
-DATA_DIR = _resolve_data_dir()
-DB_PATH = DATA_DIR / "cloudlog.sqlite3"
-DB = CloudlogDB(DB_PATH)
+def _minutes_to_hhmm(minutes: int) -> str:
+    m = max(0, int(minutes))
+    hh, mm = divmod(m, 60)
+    return f"{hh:02d}:{mm:02d}"
 
-TEMPLATES_DIR = Path(__file__).parent / "templates"
-STATIC_DIR = Path(__file__).parent / "static"
-templates = Jinja2Templates(directory=str(TEMPLATES_DIR))
 
-app = FastAPI(title="Cloudlog Clone")
-app.mount("/static", StaticFiles(directory=str(STATIC_DIR)), name="static")
+def _wants_json(request: Request) -> bool:
+    accept = (request.headers.get("accept") or "").lower()
+    content_type = (request.headers.get("content-type") or "").lower()
+    return "application/json" in accept or "application/json" in content_type
 
-_session_secret_env = (os.getenv("CLOUDLOG_SECRET_KEY", "") or "").strip()
-_session_secret = _session_secret_env or secrets.token_urlsafe(48)
-_https = _https_only()
-_allowed_hosts_raw = (os.getenv("CLOUDLOG_ALLOWED_HOSTS", "*") or "*").strip()
-_allowed_hosts = _parse_allowed_hosts(_allowed_hosts_raw)
-_trusted_proxies_raw = (os.getenv("CLOUDLOG_TRUSTED_PROXIES", "*") or "*").strip()
-_trusted_proxies: list[str] | str = _parse_trusted_proxies(_trusted_proxies_raw)
+
+app = FastAPI(title="Cloudlog Time Clock")
+app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
+templates = _resolve_templates()
+store = TimeclockStore.from_env()
+
+_https_only = _parse_bool(os.getenv("CLOUDLOG_HTTPS_ONLY", "1"), default=True)
+_allowed_hosts = _parse_allowed_hosts(os.getenv("CLOUDLOG_ALLOWED_HOSTS", "localhost,127.0.0.1"))
+_trusted_proxies = _parse_trusted_proxies(os.getenv("CLOUDLOG_TRUSTED_PROXIES", "*"))
+_session_secret = (os.getenv("CLOUDLOG_SECRET_KEY", "") or "").strip() or secrets.token_urlsafe(48)
+_session_max_age = int((os.getenv("CLOUDLOG_SESSION_MAX_AGE_SECONDS", "43200") or "43200").strip())
+_remember_days = int((os.getenv("CLOUDLOG_REMEMBER_MAX_AGE_DAYS", "30") or "30").strip())
+_remember_cookie = "cloudlog_remember"
+_saved_email_cookie = "cloudlog_saved_email"
+_serializer = URLSafeTimedSerializer(_session_secret, salt="cloudlog-remember")
 
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_proxies)
 app.add_middleware(
     SessionMiddleware,
     secret_key=_session_secret,
     session_cookie="cloudlog_session",
-    https_only=_https,
+    https_only=_https_only,
     same_site="lax",
+    max_age=_session_max_age,
 )
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
 
@@ -252,108 +228,114 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
 @app.on_event("startup")
 def _startup() -> None:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    if not _session_secret_env:
-        log.warning("CLOUDLOG_SECRET_KEY is not set. Session secret will rotate on restart.")
-    if "*" in _allowed_hosts_raw:
-        log.warning("CLOUDLOG_ALLOWED_HOSTS cannot include '*'. Ignored wildcard and using explicit hosts.")
-    if not _https:
-        log.warning("CLOUDLOG_HTTPS_ONLY is off. Enable it in production.")
-
-
-@app.on_event("shutdown")
-def _shutdown() -> None:
-    DB.close()
-
-
-def _security_headers(response) -> None:
-    response.headers["X-Frame-Options"] = "DENY"
-    response.headers["X-Content-Type-Options"] = "nosniff"
-    response.headers["Referrer-Policy"] = "same-origin"
-    response.headers["Content-Security-Policy"] = (
-        "default-src 'self'; style-src 'self'; script-src 'self'; img-src 'self' data:; "
-        "form-action 'self'; base-uri 'self'; frame-ancestors 'none'"
-    )
-    if _https:
-        response.headers["Strict-Transport-Security"] = "max-age=31536000; includeSubDomains"
+    try:
+        store.refresh_holidays_cache(force=False)
+    except Exception:
+        log.exception("holiday refresh failed")
 
 
 @app.middleware("http")
 async def _auth_middleware(request: Request, call_next):  # type: ignore
     path = request.url.path
-    public = {"/login", "/register", "/health"}
-    is_api = path.startswith("/api/")
-    if path.startswith("/static") or path in public:
-        resp = await call_next(request)
-        _security_headers(resp)
-        return resp
+    public_paths = {
+        "/health",
+        "/login",
+        "/auth/login",
+        "/register",
+    }
 
-    uid = get_user_id(request.session)
+    if path.startswith("/static") or path in public_paths:
+        return await call_next(request)
+
+    uid = _session_user_id(request.session)
     if uid is None:
-        if is_api:
-            resp = JSONResponse(status_code=401, content={"ok": False, "error": "authentication required"})
-        else:
-            resp = RedirectResponse(url=f"/login?next={quote(path)}", status_code=303)
-        _security_headers(resp)
-        return resp
+        remember_token = request.cookies.get(_remember_cookie)
+        if remember_token:
+            try:
+                payload = _serializer.loads(remember_token, max_age=_remember_days * 86400)
+                remember_user_id = str(payload.get("uid") or "")
+                remember_sig = str(payload.get("sig") or "")
+                user = store.get_user_by_id(remember_user_id)
+                if user and user["is_active"]:
+                    expected = secrets.compare_digest(remember_sig, _password_signature(user["password_hash"]))
+                    if expected:
+                        _login_session(request.session, user_id=user["user_id"], email=user["email"])
+                        uid = user["user_id"]
+            except BadData:
+                pass
 
-    user = DB.get_user(uid)
-    if user is None or not user.active:
-        logout_session(request.session)
-        if is_api:
-            resp = JSONResponse(status_code=401, content={"ok": False, "error": "invalid session"})
-        else:
-            resp = RedirectResponse(url="/login", status_code=303)
-        _security_headers(resp)
-        return resp
-
-    resp = await call_next(request)
-    _security_headers(resp)
-    return resp
-
-
-def _require_user(request: Request):
-    uid = get_user_id(request.session)
     if uid is None:
-        raise HTTPException(status_code=401)
-    user = DB.get_user(uid)
-    if user is None:
-        raise HTTPException(status_code=401)
+        if path.startswith("/api/"):
+            return JSONResponse(status_code=401, content={"ok": False, "error": "authentication required"})
+        return RedirectResponse(url=f"/login?next={quote(path)}", status_code=303)
+
+    user = store.get_user_by_id(uid)
+    if user is None or not user["is_active"]:
+        _logout_session(request.session)
+        if path.startswith("/api/"):
+            return JSONResponse(status_code=401, content={"ok": False, "error": "invalid session"})
+        return RedirectResponse(url="/login", status_code=303)
+
+    request.state.current_user = user
+    return await call_next(request)
+
+
+def _password_signature(password_hash: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(password_hash.encode("utf-8")).hexdigest()[:24]
+
+
+def _require_user(request: Request) -> dict[str, Any]:
+    user = getattr(request.state, "current_user", None)
+    if not user:
+        uid = _session_user_id(request.session)
+        if not uid:
+            raise HTTPException(status_code=401)
+        row = store.get_user_by_id(uid)
+        if row is None:
+            raise HTTPException(status_code=401)
+        request.state.current_user = row
+        return row
     return user
 
 
-def _require_role(request: Request, minimum_role: str):
+def _require_admin(request: Request) -> dict[str, Any]:
     user = _require_user(request)
-    if not _role_at_least(user.role, minimum_role):
+    if ROLE_ORDER.get(user["role"], 0) < ROLE_ORDER[ROLE_ADMIN]:
         raise HTTPException(status_code=403)
     return user
 
 
-def _validate_csrf_or_redirect(request: Request, csrf_token: str | None, redirect_to: str) -> RedirectResponse | None:
-    if validate_csrf(request.session, csrf_token):
-        return None
-    return RedirectResponse(url=redirect_to, status_code=303)
-
-
-def _render(request: Request, name: str, context: dict[str, Any], *, status_code: int = 200) -> HTMLResponse:
-    csrf_token = ensure_csrf_token(request.session)
-    uid = get_user_id(request.session)
-    user = DB.get_user(uid) if uid else None
+def _render(request: Request, template_name: str, context: dict[str, Any], *, status_code: int = 200) -> HTMLResponse:
+    user = getattr(request.state, "current_user", None)
     merged = {
         "request": request,
-        "csrf_token": csrf_token,
-        "auth_user": get_username(request.session),
+        "csrf_token": _ensure_csrf_token(request.session),
         "current_user": user,
-        "allow_registration": _allow_registration(),
+        "auth_email": _session_user_email(request.session),
         "ROLE_ADMIN": ROLE_ADMIN,
-        "ROLE_MANAGER": ROLE_MANAGER,
-        "ROLE_MEMBER": ROLE_MEMBER,
-        "fmt_hours": _fmt_hours,
-        "fmt_ts_jst": _fmt_ts_jst,
-        "fmt_seconds_as_hours": _fmt_seconds_as_hours,
-        "to_datetime_local": _to_datetime_local,
+        "today": _jst_today().isoformat(),
+        "minutes_to_hhmm": _minutes_to_hhmm,
+        "fmt_hhmm": _fmt_hhmm,
+        "fmt_hhmm_dt": _fmt_hhmm_dt,
         **context,
     }
-    return templates.TemplateResponse(name, merged, status_code=status_code)
+    return templates.TemplateResponse(template_name, merged, status_code=status_code)
+
+
+def _error_or_redirect(request: Request, *, redirect_to: str, message: str, code: int = 400) -> JSONResponse | RedirectResponse:
+    if _wants_json(request):
+        return JSONResponse(status_code=code, content={"ok": False, "error": message})
+    return RedirectResponse(url=f"{redirect_to}{'&' if '?' in redirect_to else '?'}error={quote(message)}", status_code=303)
+
+
+def _success_or_redirect(request: Request, *, redirect_to: str, payload: dict[str, Any], flash: str) -> JSONResponse | RedirectResponse:
+    if _wants_json(request):
+        body = {"ok": True}
+        body.update(payload)
+        return JSONResponse(content=body)
+    return RedirectResponse(url=f"{redirect_to}{'&' if '?' in redirect_to else '?'}msg={quote(flash)}", status_code=303)
 
 
 @app.get("/health", response_class=PlainTextResponse)
@@ -362,106 +344,126 @@ def health() -> str:
 
 
 @app.get("/login", response_class=HTMLResponse)
-def login_page(request: Request, next: str = "/"):  # noqa: A002
-    if get_user_id(request.session) is not None:
-        return RedirectResponse(url="/", status_code=303)
-    return _render(request, "login.html", {"title": "ログイン", "next": _safe_next(next), "error": ""})
+def login_page(request: Request, next: str = "/today"):  # noqa: A002
+    if _session_user_id(request.session):
+        return RedirectResponse(url="/today", status_code=303)
+    return _render(
+        request,
+        "login.html",
+        {
+            "title": "ログイン",
+            "next": _safe_next(next),
+            "error": str(request.query_params.get("error") or ""),
+            "saved_email": str(request.cookies.get(_saved_email_cookie) or ""),
+        },
+    )
 
 
-@app.post("/login")
-async def login(request: Request):
+@app.post("/auth/login")
+async def auth_login(request: Request):
     form = await request.form()
-    username = str(form.get("username", "")).strip()
-    password = str(form.get("password", ""))
-    next_path = _safe_next(str(form.get("next", "/")))
+    email = str(form.get("email") or "").strip().lower()
+    password = str(form.get("password") or "")
+    remember = str(form.get("remember") or "") == "1"
+    next_path = _safe_next(str(form.get("next") or "/today"))
 
-    row = DB.get_user_auth(username)
-    if row is None or not row.active or not verify_password(password, row.password_hash):
+    user = store.authenticate_user(email=email, password=password)
+    if user is None:
         return _render(
             request,
             "login.html",
-            {"title": "ログイン", "next": next_path, "error": "ユーザー名またはパスワードが違います"},
+            {
+                "title": "ログイン",
+                "next": next_path,
+                "error": "メールアドレスまたはパスワードが違います",
+                "saved_email": email,
+            },
             status_code=401,
         )
 
-    login_session(request.session, user_id=row.id, username=row.username)
-    return RedirectResponse(url=next_path, status_code=303)
+    _login_session(request.session, user_id=user["user_id"], email=user["email"])
+    resp = RedirectResponse(url=next_path, status_code=303)
+    resp.set_cookie(_saved_email_cookie, user["email"], max_age=31536000, secure=_https_only, samesite="lax")
+    if remember:
+        token = _serializer.dumps({"uid": user["user_id"], "sig": _password_signature(user["password_hash"])})
+        resp.set_cookie(
+            _remember_cookie,
+            token,
+            httponly=True,
+            secure=_https_only,
+            samesite="lax",
+            max_age=_remember_days * 86400,
+        )
+    else:
+        resp.delete_cookie(_remember_cookie)
+    return resp
+
+
+@app.post("/auth/logout")
+async def auth_logout(request: Request):
+    form = await request.form()
+    csrf_token = str(form.get("csrf_token") or "")
+    if not _validate_csrf(request.session, csrf_token):
+        return RedirectResponse(url="/today", status_code=303)
+
+    _logout_session(request.session)
+    resp = RedirectResponse(url="/login", status_code=303)
+    resp.delete_cookie(_remember_cookie)
+    return resp
 
 
 @app.post("/logout")
-async def logout(request: Request):
-    form = await request.form()
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/")
-    if redirect:
-        return redirect
-    logout_session(request.session)
-    return RedirectResponse(url="/login", status_code=303)
+async def logout_legacy(request: Request):
+    return await auth_logout(request)
 
 
-@app.get("/register", response_class=HTMLResponse)
-def register_page(request: Request):
-    if not _allow_registration():
-        return RedirectResponse(url="/login", status_code=303)
-    return _render(request, "register.html", {"title": "新規登録", "error": ""})
-
-
-@app.post("/register")
-async def register(request: Request):
-    if not _allow_registration():
-        return RedirectResponse(url="/login", status_code=303)
-
-    form = await request.form()
-    username = str(form.get("username", "")).strip()
-    password = str(form.get("password", ""))
-
-    if len(username) < 3:
-        return _render(request, "register.html", {"title": "新規登録", "error": "ユーザー名は3文字以上にしてください"}, status_code=400)
-    if len(password) < 8:
-        return _render(request, "register.html", {"title": "新規登録", "error": "パスワードは8文字以上にしてください"}, status_code=400)
-
-    if DB.get_user_by_name(username) is not None:
-        return _render(request, "register.html", {"title": "新規登録", "error": "同名ユーザーが既に存在します"}, status_code=400)
-
-    user_id = DB.create_user(username=username, password_hash=hash_password(password), role=ROLE_MEMBER)
-    login_session(request.session, user_id=user_id, username=username)
-    return RedirectResponse(url="/", status_code=303)
+@app.get("/me")
+def me(request: Request):
+    user = _require_user(request)
+    return {
+        "ok": True,
+        "user": {
+            "user_id": user["user_id"],
+            "email": user["email"],
+            "name": user["name"],
+            "role": user["role"],
+            "is_active": user["is_active"],
+        },
+    }
 
 
 @app.get("/", response_class=HTMLResponse)
-def dashboard(request: Request, month: str | None = None):
-    user = _require_user(request)
-    base = date.today()
-    if month:
-        try:
-            base = datetime.strptime(month + "-01", "%Y-%m-%d").date()
-        except ValueError:
-            base = date.today()
-    from_d, to_d = _month_bounds(base)
+def home(request: Request):
+    _require_user(request)
+    return RedirectResponse(url="/today", status_code=303)
 
-    scoped_user = None if _role_at_least(user.role, ROLE_MANAGER) else user.id
-    totals = DB.dashboard_totals(from_date=from_d.isoformat(), to_date=to_d.isoformat(), user_id=scoped_user)
-    project_rows = DB.project_report(from_date=from_d.isoformat(), to_date=to_d.isoformat(), user_id=scoped_user)
-    top_projects = sorted(project_rows, key=lambda x: x["actual_hours"], reverse=True)[:6]
-    status_rows = DB.submission_status_list(from_date=from_d.isoformat(), to_date=to_d.isoformat()) if _role_at_least(user.role, ROLE_MANAGER) else []
-    timer = DB.get_timer(user_id=user.id)
-    elapsed_minutes = 0
-    if timer:
-        elapsed_minutes = int(max(0, int(time.time()) - timer.started_at) / 60)
+
+@app.get("/today", response_class=HTMLResponse)
+def today_page(request: Request):
+    user = _require_user(request)
+    target = _jst_today()
+    rec = store.get_day_record(user_id=user["user_id"], target_date=target)
+    month_start, month_end = store.get_payroll_period(anchor=target)
+    _, summary = store.daily_records(user_id=user["user_id"], period_start=month_start, period_end=month_end)
+
+    status = "未出勤"
+    if rec["clock_in"] and not rec["clock_out"]:
+        status = "出勤済"
+    elif rec["clock_in"] and rec["clock_out"]:
+        status = "退勤済"
 
     return _render(
         request,
-        "dashboard.html",
+        "today.html",
         {
-            "title": "ダッシュボード",
-            "month": from_d.strftime("%Y-%m"),
-            "from_date": from_d.isoformat(),
-            "to_date": to_d.isoformat(),
-            "totals": totals,
-            "top_projects": top_projects,
-            "status_rows": status_rows,
-            "timer": timer,
-            "elapsed_minutes": elapsed_minutes,
+            "title": "本日の打刻",
+            "status": status,
+            "record": rec,
+            "month_start": month_start.isoformat(),
+            "month_end": month_end.isoformat(),
+            "summary": summary,
+            "flash_error": str(request.query_params.get("error") or ""),
+            "flash_message": str(request.query_params.get("msg") or ""),
         },
     )
 
@@ -469,1044 +471,517 @@ def dashboard(request: Request, month: str | None = None):
 @app.get("/attendance/today")
 def attendance_today(request: Request):
     user = _require_user(request)
-    today = _jst_today_iso()
-    row = DB.get_attendance_by_user_date(user_id=user.id, work_date=today)
-    status = _attendance_status(row)
-    return {
-        "ok": True,
-        "date": today,
-        "status": status,
-        "clock_in_at": row.clock_in_at if row else None,
-        "clock_out_at": row.clock_out_at if row else None,
-        "clock_in_at_jst": _fmt_ts_jst(row.clock_in_at) if row else "-",
-        "clock_out_at_jst": _fmt_ts_jst(row.clock_out_at) if row else "-",
-    }
+    target = _jst_today()
+    rec = store.get_day_record(user_id=user["user_id"], target_date=target)
+    status = "未出勤"
+    if rec["clock_in"] and not rec["clock_out"]:
+        status = "出勤済"
+    elif rec["clock_in"] and rec["clock_out"]:
+        status = "退勤済"
+    return {"ok": True, "date": target.isoformat(), "status": status, "record": rec}
 
 
 @app.get("/attendance", response_class=HTMLResponse)
-def attendance_page(
-    request: Request,
-    preset: str = "this-month",
-    from_date: str | None = None,
-    to_date: str | None = None,
-):
-    user = _require_user(request)
-    today = _jst_today()
+def attendance_alias(request: Request):
+    _require_user(request)
+    return RedirectResponse(url="/today", status_code=303)
 
-    this_month_first, this_month_last = _month_bounds(today)
-    last_month_first, last_month_last = _month_bounds(this_month_first - timedelta(days=1))
+
+async def _clock_action(request: Request, event_type: str, ok_message: str):
+    user = _require_user(request)
+    form = await request.form()
+    csrf_token = str(form.get("csrf_token") or "")
+    if not _validate_csrf(request.session, csrf_token):
+        return _error_or_redirect(request, redirect_to="/today", message="CSRF tokenが不正です", code=400)
+    note = str(form.get("note") or "").strip()
+    try:
+        event = store.clock_action(
+            user_id=user["user_id"],
+            action=event_type,
+            note=note,
+            ip=request.client.host if request.client else "",
+            user_agent=str(request.headers.get("user-agent") or ""),
+        )
+    except ValueError as exc:
+        code = str(exc)
+        msg_map = {
+            "already_clocked_in": "既に出勤済みです",
+            "already_clocked_out": "既に退勤済みです",
+            "clock_in_required": "先に出勤打刻が必要です",
+            "already_outing": "すでに外出中です",
+            "outing_required": "先に外出打刻が必要です",
+            "already_returned": "既に戻り打刻済みです",
+            "invalid_action": "不正な打刻操作です",
+        }
+        return _error_or_redirect(request, redirect_to="/today", message=msg_map.get(code, "打刻に失敗しました"), code=400)
+
+    return _success_or_redirect(
+        request,
+        redirect_to="/today",
+        payload={"event": {k: v for k, v in event.items() if k != "event_dt"}},
+        flash=ok_message,
+    )
+
+
+@app.post("/events/clock-in")
+async def clock_in(request: Request):
+    return await _clock_action(request, EVENT_IN, "出勤しました")
+
+
+@app.post("/events/clock-out")
+async def clock_out(request: Request):
+    return await _clock_action(request, EVENT_OUT, "退勤しました")
+
+
+@app.post("/events/outing")
+async def clock_outing(request: Request):
+    return await _clock_action(request, EVENT_OUTING, "外出しました")
+
+
+@app.post("/events/return")
+async def clock_return(request: Request):
+    return await _clock_action(request, EVENT_RETURN, "戻りました")
+
+
+@app.get("/records", response_class=HTMLResponse)
+def records_page(request: Request, period: str | None = None, from_date: str | None = None, to_date: str | None = None):
+    user = _require_user(request)
+
+    today = _jst_today()
+    month_key = _parse_month(period, today)
+    period_start, period_end = store.get_payroll_period_by_month(month_key)
 
     if from_date and to_date:
-        range_from = _to_date(from_date, this_month_first)
-        range_to = _to_date(to_date, this_month_last)
-    elif preset == "last-month":
-        range_from = last_month_first
-        range_to = last_month_last
-    else:
-        range_from = this_month_first
-        range_to = this_month_last
+        period_start = _parse_date(from_date, period_start)
+        period_end = _parse_date(to_date, period_end)
 
-    today_key = today.isoformat()
-    today_log = DB.get_attendance_by_user_date(user_id=user.id, work_date=today_key)
-    today_status = _attendance_status(today_log)
-
-    rows = DB.list_attendance(
-        user_id=user.id,
-        from_date=range_from.isoformat(),
-        to_date=range_to.isoformat(),
-    )
-    history: list[dict[str, Any]] = []
-    for row in rows:
-        seconds = _worked_seconds(row)
-        history.append(
-            {
-                "row": row,
-                "worked_seconds": seconds,
-                "worked_hours": _fmt_seconds_as_hours(seconds),
-            }
-        )
-
-    month_summary = DB.attendance_summary(
-        user_id=user.id,
-        from_date=this_month_first.isoformat(),
-        to_date=this_month_last.isoformat(),
-    )
-
-    can_clock_in = today_status == "未出勤"
-    can_clock_out = today_status == "出勤済"
-
+    rows, summary = store.daily_records(user_id=user["user_id"], period_start=period_start, period_end=period_end)
     return _render(
         request,
-        "attendance.html",
+        "records.html",
         {
-            "title": "打刻",
-            "today_status": today_status,
-            "today_log": today_log,
-            "can_clock_in": can_clock_in,
-            "can_clock_out": can_clock_out,
-            "history": history,
-            "from_date": range_from.isoformat(),
-            "to_date": range_to.isoformat(),
-            "preset": preset,
-            "month_worked_days": month_summary["worked_days"],
-            "month_worked_hours": _fmt_seconds_as_hours(month_summary["total_seconds"]),
-            "flash_error": str(request.query_params.get("error", "") or ""),
-            "flash_message": str(request.query_params.get("msg", "") or ""),
-        },
-    )
-
-
-@app.post("/attendance/clock-in")
-async def attendance_clock_in(request: Request):
-    user = _require_user(request)
-    form = await request.form()
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/attendance")
-    if redirect:
-        return redirect
-
-    work_date = _jst_today_iso()
-    try:
-        DB.clock_in(user_id=user.id, work_date=work_date, at_ts=int(_jst_now().timestamp()))
-    except ValueError as e:
-        code = str(e)
-        if code == "already_clocked_in":
-            return RedirectResponse(url="/attendance?error=既に出勤打刻済みです", status_code=303)
-        if code == "already_clocked_out":
-            return RedirectResponse(url="/attendance?error=本日は既に退勤済みです", status_code=303)
-        return RedirectResponse(url="/attendance?error=出勤打刻に失敗しました", status_code=303)
-
-    return RedirectResponse(url="/attendance?msg=出勤打刻しました", status_code=303)
-
-
-@app.post("/attendance/clock-out")
-async def attendance_clock_out(request: Request):
-    user = _require_user(request)
-    form = await request.form()
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/attendance")
-    if redirect:
-        return redirect
-
-    work_date = _jst_today_iso()
-    try:
-        DB.clock_out(user_id=user.id, work_date=work_date, at_ts=int(_jst_now().timestamp()))
-    except ValueError as e:
-        code = str(e)
-        if code == "clock_in_required":
-            return RedirectResponse(url="/attendance?error=出勤前に退勤打刻はできません", status_code=303)
-        if code == "already_clocked_out":
-            return RedirectResponse(url="/attendance?error=既に退勤打刻済みです", status_code=303)
-        return RedirectResponse(url="/attendance?error=退勤打刻に失敗しました", status_code=303)
-
-    return RedirectResponse(url="/attendance?msg=退勤打刻しました", status_code=303)
-
-
-@app.get("/admin/attendance", response_class=HTMLResponse)
-def admin_attendance_page(
-    request: Request,
-    from_date: str | None = None,
-    to_date: str | None = None,
-    user_id: int | None = None,
-):
-    _require_role(request, ROLE_ADMIN)
-    today = _jst_today()
-    month_first, month_last = _month_bounds(today)
-
-    range_from = _to_date(from_date, month_first).isoformat()
-    range_to = _to_date(to_date, month_last).isoformat()
-    selected_user_id = int(user_id) if user_id else None
-
-    rows = DB.list_attendance(
-        user_id=selected_user_id,
-        from_date=range_from,
-        to_date=range_to,
-    )
-    history: list[dict[str, Any]] = []
-    for row in rows:
-        seconds = _worked_seconds(row)
-        history.append(
-            {
-                "row": row,
-                "worked_seconds": seconds,
-                "worked_hours": _fmt_seconds_as_hours(seconds),
-            }
-        )
-
-    return _render(
-        request,
-        "admin_attendance.html",
-        {
-            "title": "打刻管理",
-            "users": DB.list_users(active_only=True),
-            "selected_user_id": selected_user_id,
-            "from_date": range_from,
-            "to_date": range_to,
-            "history": history,
-            "flash_error": str(request.query_params.get("error", "") or ""),
-            "flash_message": str(request.query_params.get("msg", "") or ""),
-        },
-    )
-
-
-@app.post("/admin/attendance/{attendance_id}")
-async def admin_attendance_update(request: Request, attendance_id: int):
-    admin = _require_role(request, ROLE_ADMIN)
-    form = await request.form()
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/admin/attendance")
-    if redirect:
-        return redirect
-
-    from_date = str(form.get("from_date", "") or "").strip()
-    to_date = str(form.get("to_date", "") or "").strip()
-    user_id = str(form.get("user_id", "") or "").strip()
-    query_suffix = f"from_date={quote(from_date)}&to_date={quote(to_date)}"
-    if user_id:
-        query_suffix += f"&user_id={quote(user_id)}"
-
-    reason = str(form.get("reason", "") or "").strip()
-    note = str(form.get("note", "") or "").strip()
-    try:
-        clock_in_at = _parse_datetime_local(str(form.get("clock_in_at", "") or ""))
-        clock_out_at = _parse_datetime_local(str(form.get("clock_out_at", "") or ""))
-    except ValueError:
-        return RedirectResponse(url=f"/admin/attendance?{query_suffix}&error={quote('日時フォーマットが不正です')}", status_code=303)
-
-    try:
-        DB.admin_update_attendance(
-            attendance_id=attendance_id,
-            actor_user_id=admin.id,
-            clock_in_at=clock_in_at,
-            clock_out_at=clock_out_at,
-            note=note,
-            reason=reason,
-        )
-    except ValueError as e:
-        code = str(e)
-        if code == "reason_required":
-            msg = "修正理由は必須です"
-        elif code == "clock_in_required":
-            msg = "出勤時刻なしで退勤時刻のみは設定できません"
-        elif code == "clock_out_must_be_after_clock_in":
-            msg = "退勤時刻は出勤時刻より後に設定してください"
-        elif code == "attendance_not_found":
-            msg = "対象の打刻が見つかりません"
-        else:
-            msg = "打刻修正に失敗しました"
-        return RedirectResponse(url=f"/admin/attendance?{query_suffix}&error={quote(msg)}", status_code=303)
-
-    return RedirectResponse(url=f"/admin/attendance?{query_suffix}&msg=打刻を修正しました", status_code=303)
-
-
-@app.get("/entries", response_class=HTMLResponse)
-def entries_page(request: Request, week_start: str | None = None, user_id: int | None = None):
-    user = _require_user(request)
-
-    base = _to_date(week_start, date.today())
-    start_d, end_d = _week_bounds(base)
-
-    target_user_id = user.id
-    users = []
-    if _role_at_least(user.role, ROLE_MANAGER):
-        users = DB.list_users(active_only=True)
-        if user_id:
-            target_user_id = int(user_id)
-
-    entries = DB.list_entries(
-        user_id=target_user_id,
-        from_date=start_d.isoformat(),
-        to_date=end_d.isoformat(),
-    )
-    projects = DB.list_projects(include_archived=False)
-    tasks = DB.list_tasks(active_only=True)
-
-    task_map: dict[int, list[dict[str, Any]]] = defaultdict(list)
-    for task in tasks:
-        task_map[task.project_id].append({"id": task.id, "name": task.name})
-
-    by_date: dict[str, list[Any]] = defaultdict(list)
-    total_minutes = 0
-    for entry in entries:
-        by_date[entry.work_date].append(entry)
-        total_minutes += entry.minutes
-
-    days: list[date] = [start_d + timedelta(days=i) for i in range(7)]
-
-    timer = DB.get_timer(user_id=target_user_id)
-    timer_minutes = 0
-    if timer and target_user_id == user.id:
-        timer_minutes = int(max(0, int(time.time()) - timer.started_at) / 60)
-
-    return _render(
-        request,
-        "entries.html",
-        {
-            "title": "工数入力",
-            "week_start": start_d.isoformat(),
-            "week_end": end_d.isoformat(),
-            "entries": entries,
-            "projects": projects,
-            "tasks": tasks,
-            "task_map_json": {k: v for k, v in task_map.items()},
-            "days": days,
-            "by_date": by_date,
-            "users": users,
-            "target_user_id": target_user_id,
-            "total_hours": total_minutes / 60.0,
-            "timer": timer,
-            "timer_minutes": timer_minutes,
-        },
-    )
-
-
-@app.post("/entries")
-async def create_entry(request: Request):
-    user = _require_user(request)
-    form = await request.form()
-
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/entries")
-    if redirect:
-        return redirect
-
-    target_user_id = user.id
-    raw_user_id = str(form.get("user_id", "") or "").strip()
-    if raw_user_id and _role_at_least(user.role, ROLE_MANAGER):
-        target_user_id = int(raw_user_id)
-
-    work_date = str(form.get("work_date", date.today().isoformat())).strip()
-    project_id = int(str(form.get("project_id", "0") or "0"))
-    task_id_raw = str(form.get("task_id", "") or "").strip()
-    task_id = int(task_id_raw) if task_id_raw else None
-    note = str(form.get("note", "") or "").strip()
-    minutes = _minutes_from_hours(str(form.get("hours", "0") or "0"))
-
-    if project_id <= 0 or minutes <= 0:
-        return RedirectResponse(url=f"/entries?week_start={quote(work_date)}", status_code=303)
-
-    DB.create_entry(
-        user_id=target_user_id,
-        project_id=project_id,
-        task_id=task_id,
-        work_date=work_date,
-        minutes=minutes,
-        note=note,
-        status=STATUS_DRAFT,
-    )
-
-    week_start = str(form.get("week_start", work_date) or work_date)
-    qs = f"week_start={quote(week_start)}"
-    if _role_at_least(user.role, ROLE_MANAGER):
-        qs += f"&user_id={target_user_id}"
-    return RedirectResponse(url=f"/entries?{qs}", status_code=303)
-
-
-@app.post("/entries/{entry_id}/update")
-async def update_entry(request: Request, entry_id: int):
-    user = _require_user(request)
-    form = await request.form()
-
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/entries")
-    if redirect:
-        return redirect
-
-    entry = DB.get_entry(entry_id)
-    if entry is None:
-        return RedirectResponse(url="/entries", status_code=303)
-
-    editable = entry.status in {STATUS_DRAFT, STATUS_REJECTED}
-    if not editable:
-        return RedirectResponse(url="/entries", status_code=303)
-
-    if not _role_at_least(user.role, ROLE_MANAGER) and entry.user_id != user.id:
-        return RedirectResponse(url="/entries", status_code=303)
-
-    work_date = str(form.get("work_date", entry.work_date)).strip()
-    project_id = int(str(form.get("project_id", entry.project_id) or entry.project_id))
-    task_id_raw = str(form.get("task_id", "") or "").strip()
-    task_id = int(task_id_raw) if task_id_raw else None
-    note = str(form.get("note", "") or "").strip()
-    minutes = _minutes_from_hours(str(form.get("hours", str(entry.minutes / 60.0)) or "0"))
-
-    if project_id > 0 and minutes > 0:
-        DB.update_entry(
-            entry_id=entry.id,
-            project_id=project_id,
-            task_id=task_id,
-            work_date=work_date,
-            minutes=minutes,
-            note=note,
-        )
-
-    return RedirectResponse(url=f"/entries?week_start={quote(work_date)}&user_id={entry.user_id}", status_code=303)
-
-
-@app.post("/entries/{entry_id}/delete")
-async def delete_entry(request: Request, entry_id: int):
-    user = _require_user(request)
-    form = await request.form()
-
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/entries")
-    if redirect:
-        return redirect
-
-    entry = DB.get_entry(entry_id)
-    if entry is None:
-        return RedirectResponse(url="/entries", status_code=303)
-
-    if entry.status == STATUS_APPROVED:
-        return RedirectResponse(url="/entries", status_code=303)
-    if not _role_at_least(user.role, ROLE_MANAGER) and entry.user_id != user.id:
-        return RedirectResponse(url="/entries", status_code=303)
-
-    DB.delete_entry(entry_id)
-    return RedirectResponse(url=f"/entries?week_start={quote(entry.work_date)}&user_id={entry.user_id}", status_code=303)
-
-
-@app.post("/entries/submit")
-async def submit_entries(request: Request):
-    user = _require_user(request)
-    form = await request.form()
-
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/entries")
-    if redirect:
-        return redirect
-
-    from_date = str(form.get("from_date", date.today().isoformat()) or date.today().isoformat())
-    to_date = str(form.get("to_date", date.today().isoformat()) or date.today().isoformat())
-    target_user_id = user.id
-    raw_user_id = str(form.get("user_id", "") or "").strip()
-    if raw_user_id and _role_at_least(user.role, ROLE_MANAGER):
-        target_user_id = int(raw_user_id)
-
-    DB.submit_entries(user_id=target_user_id, from_date=from_date, to_date=to_date)
-    return RedirectResponse(url=f"/entries?week_start={quote(from_date)}&user_id={target_user_id}", status_code=303)
-
-
-@app.post("/entries/copy")
-async def copy_entries(request: Request):
-    user = _require_user(request)
-    form = await request.form()
-
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/entries")
-    if redirect:
-        return redirect
-
-    source_date = str(form.get("source_date", "") or "").strip()
-    target_date = str(form.get("target_date", "") or "").strip()
-    if not source_date or not target_date:
-        return RedirectResponse(url="/entries", status_code=303)
-
-    target_user_id = user.id
-    raw_user_id = str(form.get("user_id", "") or "").strip()
-    if raw_user_id and _role_at_least(user.role, ROLE_MANAGER):
-        target_user_id = int(raw_user_id)
-
-    DB.copy_entries(user_id=target_user_id, source_date=source_date, target_date=target_date)
-    return RedirectResponse(url=f"/entries?week_start={quote(target_date)}&user_id={target_user_id}", status_code=303)
-
-
-@app.post("/timer/start")
-async def start_timer(request: Request):
-    user = _require_user(request)
-    form = await request.form()
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/entries")
-    if redirect:
-        return redirect
-
-    project_id = int(str(form.get("project_id", "0") or "0"))
-    if project_id <= 0:
-        return RedirectResponse(url="/entries", status_code=303)
-
-    task_id_raw = str(form.get("task_id", "") or "").strip()
-    task_id = int(task_id_raw) if task_id_raw else None
-    note = str(form.get("note", "") or "")
-    DB.start_timer(user_id=user.id, project_id=project_id, task_id=task_id, note=note)
-    return RedirectResponse(url="/entries", status_code=303)
-
-
-@app.post("/timer/stop")
-async def stop_timer(request: Request):
-    user = _require_user(request)
-    form = await request.form()
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/entries")
-    if redirect:
-        return redirect
-
-    timer = DB.stop_timer(user_id=user.id)
-    if timer is None:
-        return RedirectResponse(url="/entries", status_code=303)
-
-    elapsed_seconds = max(60, int(time.time()) - timer.started_at)
-    minutes = max(1, int(round(elapsed_seconds / 60.0)))
-    work_date = date.today().isoformat()
-    DB.create_entry(
-        user_id=user.id,
-        project_id=timer.project_id,
-        task_id=timer.task_id,
-        work_date=work_date,
-        minutes=minutes,
-        note=timer.note,
-        status=STATUS_DRAFT,
-    )
-    return RedirectResponse(url=f"/entries?week_start={quote(work_date)}", status_code=303)
-
-
-@app.get("/approval", response_class=HTMLResponse)
-def approval_page(request: Request, from_date: str | None = None, to_date: str | None = None, user_id: int | None = None):
-    manager = _require_role(request, ROLE_MANAGER)
-    today = date.today()
-    default_from = (today - timedelta(days=14)).isoformat()
-    default_to = today.isoformat()
-
-    entries = DB.list_entries(
-        user_id=user_id,
-        from_date=from_date or default_from,
-        to_date=to_date or default_to,
-        status=STATUS_SUBMITTED,
-    )
-
-    return _render(
-        request,
-        "approval.html",
-        {
-            "title": "承認",
-            "entries": entries,
-            "from_date": from_date or default_from,
-            "to_date": to_date or default_to,
-            "users": DB.list_users(active_only=True),
-            "selected_user_id": user_id,
-            "is_manager": _role_at_least(manager.role, ROLE_MANAGER),
-        },
-    )
-
-
-@app.post("/entries/{entry_id}/approve")
-async def approve_entry(request: Request, entry_id: int):
-    manager = _require_role(request, ROLE_MANAGER)
-    form = await request.form()
-
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/approval")
-    if redirect:
-        return redirect
-
-    entry = DB.get_entry(entry_id)
-    if entry and entry.status == STATUS_SUBMITTED:
-        DB.approve_entry(entry_id=entry_id, approver_id=manager.id)
-        _notify_webhook(
-            DB,
-            event="entry.approved",
-            payload={
-                "entry_id": entry_id,
-                "user": entry.username,
-                "date": entry.work_date,
-                "hours": round(entry.minutes / 60.0, 2),
-                "project": entry.project_code,
-            },
-        )
-
-    return RedirectResponse(url="/approval", status_code=303)
-
-
-@app.post("/entries/{entry_id}/reject")
-async def reject_entry(request: Request, entry_id: int):
-    manager = _require_role(request, ROLE_MANAGER)
-    form = await request.form()
-
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/approval")
-    if redirect:
-        return redirect
-
-    reason = str(form.get("reason", "差し戻し") or "差し戻し")
-    entry = DB.get_entry(entry_id)
-    if entry and entry.status == STATUS_SUBMITTED:
-        DB.reject_entry(entry_id=entry_id, approver_id=manager.id, reason=reason)
-        _notify_webhook(
-            DB,
-            event="entry.rejected",
-            payload={
-                "entry_id": entry_id,
-                "user": entry.username,
-                "date": entry.work_date,
-                "reason": reason,
-            },
-        )
-
-    return RedirectResponse(url="/approval", status_code=303)
-
-
-@app.get("/projects", response_class=HTMLResponse)
-def projects_page(request: Request):
-    _require_role(request, ROLE_MANAGER)
-    return _render(
-        request,
-        "projects.html",
-        {
-            "title": "案件管理",
-            "clients": DB.list_clients(),
-            "projects": DB.list_projects(include_archived=True),
-            "tasks": DB.list_tasks(active_only=False),
-        },
-    )
-
-
-@app.post("/clients/new")
-async def create_client(request: Request):
-    _require_role(request, ROLE_MANAGER)
-    form = await request.form()
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/projects")
-    if redirect:
-        return redirect
-
-    name = str(form.get("name", "") or "").strip()
-    if name:
-        try:
-            DB.create_client(name)
-        except Exception:
-            log.exception("Failed to create client")
-    return RedirectResponse(url="/projects", status_code=303)
-
-
-@app.post("/projects/new")
-async def create_project(request: Request):
-    _require_role(request, ROLE_MANAGER)
-    form = await request.form()
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/projects")
-    if redirect:
-        return redirect
-
-    name = str(form.get("name", "") or "").strip()
-    code = str(form.get("code", "") or "").strip()
-    description = str(form.get("description", "") or "").strip()
-    client_id_raw = str(form.get("client_id", "") or "").strip()
-    start_date = str(form.get("start_date", "") or "").strip() or None
-    end_date = str(form.get("end_date", "") or "").strip() or None
-    budget_hours = _parse_hours(str(form.get("budget_hours", "0") or "0"))
-    budget_cost = _parse_hours(str(form.get("budget_cost", "0") or "0"))
-    bill_rate = _parse_hours(str(form.get("bill_rate", "0") or "0"))
-
-    if name and code:
-        try:
-            DB.create_project(
-                client_id=int(client_id_raw) if client_id_raw else None,
-                name=name,
-                code=code,
-                description=description,
-                budget_hours=budget_hours,
-                budget_cost=budget_cost,
-                bill_rate=bill_rate,
-                start_date=start_date,
-                end_date=end_date,
-            )
-        except Exception:
-            log.exception("Failed to create project")
-
-    return RedirectResponse(url="/projects", status_code=303)
-
-
-@app.post("/projects/{project_id}/archive")
-async def archive_project(request: Request, project_id: int):
-    _require_role(request, ROLE_MANAGER)
-    form = await request.form()
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/projects")
-    if redirect:
-        return redirect
-
-    DB.update_project_status(project_id, "archived")
-    return RedirectResponse(url="/projects", status_code=303)
-
-
-@app.post("/tasks/new")
-async def create_task(request: Request):
-    _require_role(request, ROLE_MANAGER)
-    form = await request.form()
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/projects")
-    if redirect:
-        return redirect
-
-    project_id = int(str(form.get("project_id", "0") or "0"))
-    name = str(form.get("name", "") or "").strip()
-    if project_id > 0 and name:
-        try:
-            DB.create_task(project_id=project_id, name=name)
-        except Exception:
-            log.exception("Failed to create task")
-
-    return RedirectResponse(url="/projects", status_code=303)
-
-
-@app.get("/users", response_class=HTMLResponse)
-def users_page(request: Request):
-    _require_role(request, ROLE_ADMIN)
-    return _render(
-        request,
-        "users.html",
-        {
-            "title": "ユーザー管理",
-            "users": DB.list_users(active_only=False),
-        },
-    )
-
-
-@app.post("/users/new")
-async def create_user(request: Request):
-    _require_role(request, ROLE_ADMIN)
-    form = await request.form()
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/users")
-    if redirect:
-        return redirect
-
-    username = str(form.get("username", "") or "").strip()
-    password = str(form.get("password", "") or "")
-    role = str(form.get("role", ROLE_MEMBER) or ROLE_MEMBER)
-    hourly_cost = _parse_hours(str(form.get("hourly_cost", "0") or "0"))
-
-    if len(username) >= 3 and len(password) >= 8 and role in ROLE_ORDER:
-        if DB.get_user_by_name(username) is None:
-            DB.create_user(username=username, password_hash=hash_password(password), role=role, hourly_cost=hourly_cost)
-
-    return RedirectResponse(url="/users", status_code=303)
-
-
-@app.post("/users/{user_id}/update")
-async def update_user(request: Request, user_id: int):
-    _require_role(request, ROLE_ADMIN)
-    form = await request.form()
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/users")
-    if redirect:
-        return redirect
-
-    role = str(form.get("role", ROLE_MEMBER) or ROLE_MEMBER)
-    hourly_cost = _parse_hours(str(form.get("hourly_cost", "0") or "0"))
-    if role in ROLE_ORDER:
-        DB.update_user_role_and_cost(user_id, role=role, hourly_cost=hourly_cost)
-    return RedirectResponse(url="/users", status_code=303)
-
-
-@app.get("/reports", response_class=HTMLResponse)
-def reports_page(request: Request, from_date: str | None = None, to_date: str | None = None):
-    user = _require_user(request)
-    today = date.today()
-    month_first, month_last = _month_bounds(today)
-
-    fd = from_date or month_first.isoformat()
-    td = to_date or month_last.isoformat()
-
-    scoped_user = None if _role_at_least(user.role, ROLE_MANAGER) else user.id
-    project_rows = DB.project_report(from_date=fd, to_date=td, user_id=scoped_user)
-    user_rows = DB.user_report(from_date=fd, to_date=td)
-
-    return _render(
-        request,
-        "reports.html",
-        {
-            "title": "レポート",
-            "from_date": fd,
-            "to_date": td,
-            "project_rows": project_rows,
-            "user_rows": user_rows,
-            "is_manager": _role_at_least(user.role, ROLE_MANAGER),
-        },
-    )
-
-
-@app.get("/status", response_class=HTMLResponse)
-def status_page(request: Request, from_date: str | None = None, to_date: str | None = None):
-    _require_role(request, ROLE_MANAGER)
-    today = date.today()
-    month_first, month_last = _month_bounds(today)
-    fd = from_date or month_first.isoformat()
-    td = to_date or month_last.isoformat()
-
-    rows = DB.submission_status_list(from_date=fd, to_date=td)
-    return _render(
-        request,
-        "status.html",
-        {
-            "title": "入力ステータス",
-            "from_date": fd,
-            "to_date": td,
+            "title": "打刻履歴",
+            "period": month_key,
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
             "rows": rows,
+            "summary": summary,
+            "flash_error": str(request.query_params.get("error") or ""),
+            "flash_message": str(request.query_params.get("msg") or ""),
         },
     )
 
 
-@app.get("/settings", response_class=HTMLResponse)
-def settings_page(request: Request):
-    _require_role(request, ROLE_MANAGER)
-    webhook_url = DB.get_setting("webhook_url", "")
-    return _render(
-        request,
-        "settings.html",
-        {
-            "title": "設定",
-            "webhook_url": webhook_url,
-        },
-    )
-
-
-@app.post("/settings/webhook")
-async def settings_webhook(request: Request):
-    _require_role(request, ROLE_MANAGER)
-    form = await request.form()
-    csrf_token = str(form.get("csrf_token", "") or "")
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/settings")
-    if redirect:
-        return redirect
-
-    webhook_url = str(form.get("webhook_url", "") or "").strip()
-    DB.set_setting("webhook_url", webhook_url)
-    return RedirectResponse(url="/settings", status_code=303)
-
-
-@app.get("/export/entries.csv")
-def export_entries(request: Request, from_date: str | None = None, to_date: str | None = None, user_id: int | None = None):
-    user = _require_user(request)
-    today = date.today()
-    month_first, month_last = _month_bounds(today)
-
-    fd = from_date or month_first.isoformat()
-    td = to_date or month_last.isoformat()
-
-    scoped_user_id = user.id
-    if _role_at_least(user.role, ROLE_MANAGER):
-        scoped_user_id = int(user_id) if user_id else None
-
-    rows = DB.export_entries(from_date=fd, to_date=td, user_id=scoped_user_id)
-
-    sio = io.StringIO()
-    writer = csv.DictWriter(
-        sio,
-        fieldnames=[
-            "id",
-            "username",
-            "date",
-            "project_code",
-            "project",
-            "task",
-            "hours",
-            "status",
-            "note",
-            "approver",
-            "reject_reason",
-        ],
-    )
-    writer.writeheader()
-    writer.writerows(rows)
-
-    payload = sio.getvalue().encode("utf-8-sig")
-    filename = f"cloudlog_entries_{fd}_{td}.csv"
-    headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
-    return StreamingResponse(io.BytesIO(payload), media_type="text/csv; charset=utf-8", headers=headers)
-
-
-@app.post("/import/entries.csv")
-async def import_entries(request: Request, csrf_token: str = Form(...), file: UploadFile = File(...)):
-    user = _require_user(request)
-    redirect = _validate_csrf_or_redirect(request, csrf_token, "/entries")
-    if redirect:
-        return redirect
-
-    content = await file.read()
-    text = content.decode("utf-8-sig", errors="replace")
-    reader = csv.DictReader(io.StringIO(text))
-
-    task_cache: dict[tuple[int, str], int] = {}
-    task_rows = DB.list_tasks(active_only=False)
-    for task in task_rows:
-        task_cache[(task.project_id, task.name)] = task.id
-
-    imported = 0
-    for row in reader:
-        work_date = str(row.get("date", "") or "").strip()
-        project_key = str(row.get("project_code", "") or row.get("project", "")).strip()
-        if not work_date or not project_key:
-            continue
-
-        project = DB.get_project_by_code_or_name(project_key)
-        if project is None:
-            continue
-
-        target_user_id = user.id
-        if _role_at_least(user.role, ROLE_MANAGER):
-            uname = str(row.get("username", "") or "").strip()
-            if uname:
-                u = DB.get_user_by_name(uname)
-                if u:
-                    target_user_id = u.id
-
-        task_name = str(row.get("task", "") or "").strip()
-        task_id = None
-        if task_name:
-            key = (project.id, task_name)
-            task_id = task_cache.get(key)
-            if task_id is None:
-                task_id = DB.create_task(project_id=project.id, name=task_name)
-                task_cache[key] = task_id
-
-        minutes = _minutes_from_hours(str(row.get("hours", "0") or "0"))
-        if minutes <= 0:
-            continue
-
-        note = str(row.get("note", "") or "")
-        status = str(row.get("status", STATUS_DRAFT) or STATUS_DRAFT).lower()
-        if status not in {STATUS_DRAFT, STATUS_SUBMITTED, STATUS_APPROVED, STATUS_REJECTED}:
-            status = STATUS_DRAFT
-        if not _role_at_least(user.role, ROLE_MANAGER):
-            status = STATUS_DRAFT
-
-        DB.create_entry(
-            user_id=target_user_id,
-            project_id=project.id,
-            task_id=task_id,
-            work_date=work_date,
-            minutes=minutes,
-            note=note,
-            status=status,
-        )
-        imported += 1
-
-    return RedirectResponse(url=f"/entries?week_start={date.today().isoformat()}&imported={imported}", status_code=303)
-
-
-@app.get("/calendar.ics")
-def calendar_feed(request: Request, from_date: str | None = None, to_date: str | None = None):
-    user = _require_user(request)
-    today = date.today()
-    month_first, month_last = _month_bounds(today)
-    fd = from_date or month_first.isoformat()
-    td = to_date or month_last.isoformat()
-
-    rows = DB.entries_for_calendar(user_id=user.id, from_date=fd, to_date=td)
-
-    lines = [
-        "BEGIN:VCALENDAR",
-        "VERSION:2.0",
-        "PRODID:-//Cloudlog Clone//JP",
-        "CALSCALE:GREGORIAN",
-        "METHOD:PUBLISH",
-    ]
-    for item in rows:
-        work_date = date.fromisoformat(item["work_date"])
-        dtstart = work_date.strftime("%Y%m%d")
-        dtend = (work_date + timedelta(days=1)).strftime("%Y%m%d")
-        uid = f"{user.id}-{item['project_code']}-{dtstart}@cloudlog.local"
-        summary = f"{item['project_code']} {item['hours']:.2f}h"
-        description = item["project_name"].replace("\n", " ")
-        lines.extend(
-            [
-                "BEGIN:VEVENT",
-                f"UID:{uid}",
-                f"DTSTAMP:{datetime.utcnow().strftime('%Y%m%dT%H%M%SZ')}",
-                f"DTSTART;VALUE=DATE:{dtstart}",
-                f"DTEND;VALUE=DATE:{dtend}",
-                f"SUMMARY:{summary}",
-                f"DESCRIPTION:{description}",
-                "END:VEVENT",
-            ]
-        )
-    lines.append("END:VCALENDAR")
-
-    payload = "\r\n".join(lines) + "\r\n"
-    return PlainTextResponse(payload, media_type="text/calendar; charset=utf-8")
-
-
-@app.get("/api/v1/projects")
-def api_projects(request: Request):
-    _require_user(request)
-    rows = DB.list_projects(include_archived=True)
-    return {"ok": True, "projects": [r.__dict__ for r in rows]}
-
-
-@app.get("/api/v1/entries")
-def api_entries(
+@app.put("/records/{work_date}")
+async def edit_record_api(
     request: Request,
-    from_date: str | None = None,
-    to_date: str | None = None,
-    user_id: int | None = None,
-    status: str | None = None,
+    work_date: str,
 ):
-    user = _require_user(request)
-
-    target_user_id = user.id
-    if _role_at_least(user.role, ROLE_MANAGER):
-        target_user_id = int(user_id) if user_id else None
-
-    rows = DB.list_entries(user_id=target_user_id, from_date=from_date, to_date=to_date, status=status)
-    return {"ok": True, "entries": [r.__dict__ for r in rows]}
-
-
-@app.post("/api/v1/entries")
-async def api_create_entry(request: Request):
     user = _require_user(request)
     payload = await request.json()
-
-    work_date = str(payload.get("date", "")).strip()
-    project_id = int(payload.get("project_id", 0) or 0)
-    task_id = payload.get("task_id")
-    note = str(payload.get("note", "") or "")
-    hours = float(payload.get("hours", 0) or 0)
-    minutes = int(round(hours * 60))
-    status = str(payload.get("status", STATUS_DRAFT) or STATUS_DRAFT).lower()
-
-    if status not in {STATUS_DRAFT, STATUS_SUBMITTED, STATUS_APPROVED, STATUS_REJECTED}:
-        status = STATUS_DRAFT
-
-    target_user_id = user.id
-    if _role_at_least(user.role, ROLE_MANAGER) and payload.get("user_id"):
-        target_user_id = int(payload["user_id"])
-
-    if not work_date:
-        return _api_error("date is required")
-    if project_id <= 0:
-        return _api_error("project_id must be positive")
-    if minutes <= 0:
-        return _api_error("hours must be positive")
-    if not _role_at_least(user.role, ROLE_MANAGER):
-        status = STATUS_DRAFT
-
-    entry_id = DB.create_entry(
-        user_id=target_user_id,
-        project_id=project_id,
-        task_id=int(task_id) if task_id else None,
-        work_date=work_date,
-        minutes=minutes,
-        note=note,
-        status=status,
-    )
-    return {"ok": True, "entry_id": entry_id}
+    try:
+        d = date.fromisoformat(work_date)
+        store.edit_day_record(
+            actor_user_id=user["user_id"],
+            target_user_id=user["user_id"],
+            target_date=d,
+            clock_in_at=_parse_datetime_local(payload.get("clock_in_at")),
+            clock_out_at=_parse_datetime_local(payload.get("clock_out_at")),
+            outing_at=_parse_datetime_local(payload.get("outing_at")),
+            return_at=_parse_datetime_local(payload.get("return_at")),
+            note=str(payload.get("note") or ""),
+        )
+    except ValueError as exc:
+        return JSONResponse(status_code=400, content={"ok": False, "error": str(exc)})
+    return {"ok": True}
 
 
-@app.get("/api/v1/reports/summary")
-def api_report_summary(request: Request, from_date: str, to_date: str):
+@app.post("/records/{work_date}")
+async def edit_record_form(request: Request, work_date: str):
     user = _require_user(request)
-    scoped_user = None if _role_at_least(user.role, ROLE_MANAGER) else user.id
-    return {
-        "ok": True,
-        "projects": DB.project_report(from_date=from_date, to_date=to_date, user_id=scoped_user),
-        "users": DB.user_report(from_date=from_date, to_date=to_date),
-    }
+    form = await request.form()
+    csrf_token = str(form.get("csrf_token") or "")
+    if not _validate_csrf(request.session, csrf_token):
+        return RedirectResponse(url="/records?error=CSRF%20tokenが不正です", status_code=303)
+
+    try:
+        d = date.fromisoformat(work_date)
+        store.edit_day_record(
+            actor_user_id=user["user_id"],
+            target_user_id=user["user_id"],
+            target_date=d,
+            clock_in_at=_parse_datetime_local(form.get("clock_in_at")),
+            clock_out_at=_parse_datetime_local(form.get("clock_out_at")),
+            outing_at=_parse_datetime_local(form.get("outing_at")),
+            return_at=_parse_datetime_local(form.get("return_at")),
+            note=str(form.get("note") or ""),
+        )
+    except ValueError:
+        return RedirectResponse(url="/records?error=入力値が不正です", status_code=303)
+
+    return RedirectResponse(url="/records?msg=修正を保存しました", status_code=303)
 
 
-@app.get("/api/v1/status")
-def api_status(request: Request, from_date: str, to_date: str):
-    _require_role(request, ROLE_MANAGER)
-    return {
-        "ok": True,
-        "status": DB.submission_status_list(from_date=from_date, to_date=to_date),
+@app.get("/leave", response_class=HTMLResponse)
+def leave_page(request: Request):
+    user = _require_user(request)
+    mine = store.list_leave_requests(user_id=user["user_id"])
+    settings = store.get_settings()
+    return _render(
+        request,
+        "leave.html",
+        {
+            "title": "休暇申請",
+            "requests": mine,
+            "special_leave_types": settings["special_leave_types_json"],
+            "flash_error": str(request.query_params.get("error") or ""),
+            "flash_message": str(request.query_params.get("msg") or ""),
+        },
+    )
+
+
+@app.post("/leave-requests")
+async def create_leave_request(request: Request):
+    user = _require_user(request)
+    form = await request.form()
+    csrf_token = str(form.get("csrf_token") or "")
+    if not _validate_csrf(request.session, csrf_token):
+        return _error_or_redirect(request, redirect_to="/leave", message="CSRF tokenが不正です", code=400)
+
+    leave_date = str(form.get("leave_date") or "").strip()
+    leave_type = str(form.get("leave_type") or LEAVE_PAID).strip()
+    leave_name = str(form.get("leave_name") or "").strip()
+    note = str(form.get("note") or "").strip()
+
+    if not leave_date:
+        return _error_or_redirect(request, redirect_to="/leave", message="日付を入力してください", code=400)
+    if leave_type not in {LEAVE_PAID, LEAVE_SPECIAL, LEAVE_COMPANY_DESIGNATED, LEAVE_OTHER}:
+        return _error_or_redirect(request, redirect_to="/leave", message="休暇種別が不正です", code=400)
+
+    if not leave_name:
+        if leave_type == LEAVE_PAID:
+            leave_name = "有給"
+        elif leave_type == LEAVE_SPECIAL:
+            leave_name = "特別休暇"
+        elif leave_type == LEAVE_COMPANY_DESIGNATED:
+            leave_name = "会社指定有給"
+        else:
+            leave_name = "その他"
+
+    store.create_leave_request(
+        user_id=user["user_id"],
+        leave_date=leave_date,
+        leave_type=leave_type,
+        leave_name=leave_name,
+        note=note,
+    )
+    return _success_or_redirect(request, redirect_to="/leave", payload={}, flash="休暇申請を登録しました")
+
+
+@app.get("/leave-requests")
+def list_leave_requests(request: Request):
+    user = _require_user(request)
+    if user["role"] == ROLE_ADMIN:
+        rows = store.list_leave_requests(user_id=None)
+    else:
+        rows = store.list_leave_requests(user_id=user["user_id"])
+    return {"ok": True, "leave_requests": rows}
+
+
+@app.put("/leave-requests/{leave_id}/approve")
+def approve_leave_api(request: Request, leave_id: str):
+    admin = _require_admin(request)
+    updated = store.decide_leave_request(leave_id=leave_id, actor_user_id=admin["user_id"], approve=True)
+    return {"ok": True, "leave_request": updated}
+
+
+@app.put("/leave-requests/{leave_id}/reject")
+def reject_leave_api(request: Request, leave_id: str):
+    admin = _require_admin(request)
+    updated = store.decide_leave_request(leave_id=leave_id, actor_user_id=admin["user_id"], approve=False)
+    return {"ok": True, "leave_request": updated}
+
+
+@app.post("/leave-requests/{leave_id}/approve")
+async def approve_leave_form(request: Request, leave_id: str):
+    _require_admin(request)
+    form = await request.form()
+    csrf_token = str(form.get("csrf_token") or "")
+    if not _validate_csrf(request.session, csrf_token):
+        return RedirectResponse(url="/admin/summary?error=CSRF%20tokenが不正です", status_code=303)
+    admin = _require_admin(request)
+    store.decide_leave_request(leave_id=leave_id, actor_user_id=admin["user_id"], approve=True)
+    return RedirectResponse(url="/admin/summary?msg=休暇申請を承認しました", status_code=303)
+
+
+@app.post("/leave-requests/{leave_id}/reject")
+async def reject_leave_form(request: Request, leave_id: str):
+    _require_admin(request)
+    form = await request.form()
+    csrf_token = str(form.get("csrf_token") or "")
+    if not _validate_csrf(request.session, csrf_token):
+        return RedirectResponse(url="/admin/summary?error=CSRF%20tokenが不正です", status_code=303)
+    admin = _require_admin(request)
+    store.decide_leave_request(leave_id=leave_id, actor_user_id=admin["user_id"], approve=False)
+    return RedirectResponse(url="/admin/summary?msg=休暇申請を却下しました", status_code=303)
+
+
+@app.get("/admin/users", response_class=HTMLResponse)
+def admin_users_page(request: Request):
+    _require_admin(request)
+    users = store.list_users()
+    if _wants_json(request):
+        return JSONResponse(content={"ok": True, "users": users})
+    return _render(
+        request,
+        "admin_users.html",
+        {
+            "title": "ユーザー管理",
+            "users": users,
+            "flash_error": str(request.query_params.get("error") or ""),
+            "flash_message": str(request.query_params.get("msg") or ""),
+        },
+    )
+
+
+@app.get("/admin/settings", response_class=HTMLResponse)
+def admin_settings_page(request: Request):
+    _require_admin(request)
+    settings = store.get_settings()
+    return _render(
+        request,
+        "admin_settings.html",
+        {
+            "title": "管理設定",
+            "settings": settings,
+            "flash_error": str(request.query_params.get("error") or ""),
+            "flash_message": str(request.query_params.get("msg") or ""),
+        },
+    )
+
+
+@app.get("/admin/summary", response_class=HTMLResponse)
+def admin_summary_page(request: Request, period: str | None = None, user_id: str | None = None):
+    _require_admin(request)
+    month_key = _parse_month(period, _jst_today())
+    period_start, period_end = store.get_payroll_period_by_month(month_key)
+    summaries = store.summary_for_period(user_id=user_id, period_start=period_start, period_end=period_end)
+    leaves = store.list_leave_requests(user_id=None)
+    users = store.list_users()
+
+    anomaly_rows: list[dict[str, Any]] = []
+    for item in summaries:
+        sm = item["summary"]
+        if sm["missing_count"] > 0 or sm["overtime_minutes"] > 0 or sm["lateness_count"] > 0:
+            anomaly_rows.append(
+                {
+                    "user": item["user"],
+                    "missing_count": sm["missing_count"],
+                    "overtime_hhmm": _minutes_to_hhmm(sm["overtime_minutes"]),
+                    "lateness_count": sm["lateness_count"],
+                }
+            )
+
+    return _render(
+        request,
+        "admin_summary.html",
+        {
+            "title": "集計・承認",
+            "period": month_key,
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
+            "summaries": summaries,
+            "users": users,
+            "selected_user_id": user_id or "",
+            "leave_requests": leaves,
+            "anomalies": anomaly_rows,
+            "flash_error": str(request.query_params.get("error") or ""),
+            "flash_message": str(request.query_params.get("msg") or ""),
+        },
+    )
+
+
+@app.post("/admin/users")
+async def admin_users_create(request: Request):
+    _require_admin(request)
+    form = await request.form()
+    if not _validate_csrf(request.session, str(form.get("csrf_token") or "")):
+        return _error_or_redirect(request, redirect_to="/admin/users", message="CSRF tokenが不正です", code=400)
+
+    email = str(form.get("email") or "").strip().lower()
+    name = str(form.get("name") or "").strip()
+    password = str(form.get("password") or "")
+    role = str(form.get("role") or "user")
+    active = str(form.get("is_active") or "1") == "1"
+
+    if len(password) < 8:
+        return _error_or_redirect(request, redirect_to="/admin/users", message="パスワードは8文字以上で入力してください", code=400)
+
+    try:
+        user = store.create_user(email=email, name=name, password=password, role=role, is_active=active)
+    except ValueError as exc:
+        return _error_or_redirect(request, redirect_to="/admin/users", message=str(exc), code=400)
+
+    return _success_or_redirect(request, redirect_to="/admin/users", payload={"user": user}, flash="ユーザーを作成しました")
+
+
+@app.put("/admin/users/{user_id}")
+async def admin_users_update_api(request: Request, user_id: str):
+    _require_admin(request)
+    payload = await request.json()
+    user = store.update_user(
+        user_id=user_id,
+        name=payload.get("name"),
+        role=payload.get("role"),
+        is_active=payload.get("is_active"),
+        password=payload.get("password"),
+    )
+    return {"ok": True, "user": user}
+
+
+@app.post("/admin/users/{user_id}")
+async def admin_users_update_form(request: Request, user_id: str):
+    _require_admin(request)
+    form = await request.form()
+    if not _validate_csrf(request.session, str(form.get("csrf_token") or "")):
+        return RedirectResponse(url="/admin/users?error=CSRF%20tokenが不正です", status_code=303)
+
+    name = str(form.get("name") or "").strip()
+    role = str(form.get("role") or "user")
+    active = str(form.get("is_active") or "1") == "1"
+    password = str(form.get("password") or "").strip()
+
+    try:
+        store.update_user(
+            user_id=user_id,
+            name=name,
+            role=role,
+            is_active=active,
+            password=password or None,
+        )
+    except ValueError:
+        return RedirectResponse(url="/admin/users?error=ユーザー更新に失敗しました", status_code=303)
+
+    return RedirectResponse(url="/admin/users?msg=ユーザーを更新しました", status_code=303)
+
+
+@app.put("/admin/settings")
+async def admin_settings_update_api(request: Request):
+    admin = _require_admin(request)
+    payload = await request.json()
+    updated = _update_settings_from_payload(actor_user_id=admin["user_id"], payload=payload)
+    return {"ok": True, "settings": updated}
+
+
+@app.post("/admin/settings")
+async def admin_settings_update_form(request: Request):
+    admin = _require_admin(request)
+    form = await request.form()
+    if not _validate_csrf(request.session, str(form.get("csrf_token") or "")):
+        return RedirectResponse(url="/admin/settings?error=CSRF%20tokenが不正です", status_code=303)
+
+    payload = {
+        "payroll_cutoff_day": int(str(form.get("payroll_cutoff_day") or "20")),
+        "scheduled_start_time": str(form.get("scheduled_start_time") or "08:55"),
+        "scheduled_end_time": str(form.get("scheduled_end_time") or "17:55"),
+        "scheduled_work_minutes": int(str(form.get("scheduled_work_minutes") or "480")),
+        "grace_minutes": int(str(form.get("grace_minutes") or "5")),
+        "break_policy_type": str(form.get("break_policy_type") or "fixed"),
+        "break_fixed_minutes": int(str(form.get("break_fixed_minutes") or "60")),
+        "break_tier_json": _parse_json_text(str(form.get("break_tier_json") or "[]"), []),
+        "working_weekdays_json": _parse_json_text(str(form.get("working_weekdays_json") or "[0,1,2,3,4]"), [0, 1, 2, 3, 4]),
+        "weekend_work_counts_as_holiday_work": str(form.get("weekend_work_counts_as_holiday_work") or "1") == "1",
+        "paid_leave_approval_mode": str(form.get("paid_leave_approval_mode") or "require_admin"),
+        "special_leave_types_json": _parse_csv_lines(str(form.get("special_leave_types") or "慶弔,特別休暇")),
+        "company_designated_paid_leave_dates_json": _parse_csv_lines(str(form.get("company_designated_paid_leave_dates") or "")),
+        "company_custom_holidays_json": _parse_csv_lines(str(form.get("company_custom_holidays") or "")),
     }
+
+    _update_settings_from_payload(actor_user_id=admin["user_id"], payload=payload)
+    return RedirectResponse(url="/admin/settings?msg=設定を更新しました", status_code=303)
+
+
+def _parse_json_text(raw: str, default: Any) -> Any:
+    text = str(raw or "").strip()
+    if not text:
+        return default
+    try:
+        return json.loads(text)
+    except Exception:
+        return default
+
+
+def _parse_csv_lines(raw: str) -> list[str]:
+    parts = []
+    for line in str(raw or "").replace("\n", ",").split(","):
+        v = line.strip()
+        if v:
+            parts.append(v)
+    return parts
+
+
+def _update_settings_from_payload(*, actor_user_id: str, payload: dict[str, Any]) -> dict[str, Any]:
+    changes = {
+        "payroll_cutoff_day": int(payload.get("payroll_cutoff_day", 20)),
+        "scheduled_start_time": str(payload.get("scheduled_start_time", "08:55")),
+        "scheduled_end_time": str(payload.get("scheduled_end_time", "17:55")),
+        "scheduled_work_minutes": int(payload.get("scheduled_work_minutes", 480)),
+        "grace_minutes": int(payload.get("grace_minutes", 5)),
+        "break_policy_type": str(payload.get("break_policy_type", "fixed")),
+        "break_fixed_minutes": int(payload.get("break_fixed_minutes", 60)),
+        "break_tier_json": payload.get("break_tier_json", []),
+        "working_weekdays_json": payload.get("working_weekdays_json", [0, 1, 2, 3, 4]),
+        "weekend_work_counts_as_holiday_work": bool(payload.get("weekend_work_counts_as_holiday_work", True)),
+        "paid_leave_approval_mode": str(payload.get("paid_leave_approval_mode", "require_admin")),
+        "special_leave_types_json": payload.get("special_leave_types_json", ["慶弔", "特別休暇"]),
+        "company_designated_paid_leave_dates_json": payload.get("company_designated_paid_leave_dates_json", []),
+        "company_custom_holidays_json": payload.get("company_custom_holidays_json", []),
+    }
+    updated = store.update_settings(actor_user_id=actor_user_id, changes=changes)
+    store.refresh_holidays_cache(force=True)
+    return updated
+
+
+@app.get("/admin/export.csv")
+def admin_export_csv(request: Request, period: str | None = None, user: str | None = None):
+    _require_admin(request)
+    month_key = _parse_month(period, _jst_today())
+    period_start, period_end = store.get_payroll_period_by_month(month_key)
+
+    users = store.list_users()
+    target_users = [u for u in users if u["is_active"]]
+    if user:
+        target_users = [u for u in target_users if u["user_id"] == user]
+
+    headers = [
+        "組織",
+        "関連エリア",
+        "氏名",
+        "日付",
+        "曜日",
+        "始業時刻",
+        "遅刻事由",
+        "外出",
+        "戻り",
+        "終業時刻",
+        "早退事由",
+        "欠勤事由",
+        "備考",
+        "修正区分",
+    ]
+
+    sio = io.StringIO()
+    writer = csv.DictWriter(sio, fieldnames=headers)
+    writer.writeheader()
+
+    for u in target_users:
+        for row in store.export_csv_rows(user_id=u["user_id"], period_start=period_start, period_end=period_end):
+            writer.writerow(row)
+
+    payload = sio.getvalue().encode("utf-8-sig")
+    filename = f"timeclock_{month_key}.csv"
+    return StreamingResponse(
+        io.BytesIO(payload),
+        media_type="text/csv; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
