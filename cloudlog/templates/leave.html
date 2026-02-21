@@ -1,0 +1,70 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>休暇申請</h1>
+
+  {% if flash_error %}
+  <p class="alert alert--error">{{ flash_error }}</p>
+  {% endif %}
+  {% if flash_message %}
+  <p class="alert alert--ok">{{ flash_message }}</p>
+  {% endif %}
+
+  <form method="post" action="/leave-requests" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+
+    <label>日付
+      <input type="date" name="leave_date" required />
+    </label>
+
+    <label>区分
+      <select name="leave_type" required>
+        <option value="PAID">有給</option>
+        <option value="SPECIAL">特別休暇</option>
+        <option value="COMPANY_DESIGNATED_PAID">会社指定有給</option>
+        <option value="OTHER">その他</option>
+      </select>
+    </label>
+
+    <label>名称
+      <input type="text" name="leave_name" placeholder="有給 / 慶弔 など" />
+    </label>
+
+    <label class="wide">メモ
+      <textarea name="note" rows="2" placeholder="申請理由など"></textarea>
+    </label>
+
+    <button class="btn btn--primary" type="submit">申請する</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>自分の申請履歴</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>日付</th>
+        <th>区分</th>
+        <th>名称</th>
+        <th>メモ</th>
+        <th>状態</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in requests %}
+      <tr>
+        <td>{{ row.leave_date }}</td>
+        <td>{{ row.leave_type }}</td>
+        <td>{{ row.leave_name }}</td>
+        <td>{{ row.note or '-' }}</td>
+        <td>{{ row.status }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="5">申請履歴がありません</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

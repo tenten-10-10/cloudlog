@@ -3,57 +3,44 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ title or "Cloudlog Clone" }}</title>
+    <title>{{ title or "Cloudlog Time Clock" }}</title>
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
     <header class="topbar">
-      <div class="container topbar__inner">
-        <a class="brand" href="/">
-          <span class="brand__mark" aria-hidden="true"></span>
-          <span>Cloudlog Clone</span>
+      <div class="shell topbar__inner">
+        <a class="brand" href="/today">
+          <span class="brand__dot" aria-hidden="true"></span>
+          <span>Cloudlog Time Clock</span>
         </a>
 
-        {% if auth_user %}
+        {% if current_user %}
         <nav class="nav">
-          <a href="/">ダッシュボード</a>
-          <a href="/attendance">打刻</a>
-          <a href="/entries">工数入力</a>
-          <a href="/reports">レポート</a>
-          {% if current_user and (current_user.role == ROLE_MANAGER or current_user.role == ROLE_ADMIN) %}
-          <a href="/approval">承認</a>
-          <a href="/projects">案件管理</a>
-          <a href="/status">入力ステータス</a>
-          <a href="/settings">設定</a>
-          {% endif %}
-          {% if current_user and current_user.role == ROLE_ADMIN %}
-          <a href="/admin/attendance">打刻管理</a>
-          <a href="/users">ユーザー管理</a>
+          <a href="/today">本日</a>
+          <a href="/records">打刻履歴</a>
+          <a href="/leave">休暇申請</a>
+          {% if current_user.role == ROLE_ADMIN %}
+          <a href="/admin/summary">集計・承認</a>
+          <a href="/admin/users">ユーザー管理</a>
+          <a href="/admin/settings">管理設定</a>
           {% endif %}
         </nav>
         {% endif %}
 
-        <div class="actions">
-          {% if auth_user %}
-          <span class="badge">{{ auth_user }} / {{ current_user.role if current_user else "-" }}</span>
-          <form action="/logout" method="post">
+        <div class="user-tools">
+          {% if current_user %}
+          <span class="chip">{{ current_user.name }} ({{ current_user.role }})</span>
+          <form method="post" action="/auth/logout">
             <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
             <button class="btn btn--ghost" type="submit">ログアウト</button>
           </form>
-          {% else %}
-            {% if allow_registration %}
-            <a class="btn btn--ghost" href="/register">新規登録</a>
-            {% endif %}
-            <a class="btn" href="/login">ログイン</a>
           {% endif %}
         </div>
       </div>
     </header>
 
-    <main class="container">
+    <main class="shell">
       {% block content %}{% endblock %}
     </main>
-
-    <script src="/static/app.js" defer></script>
   </body>
 </html>

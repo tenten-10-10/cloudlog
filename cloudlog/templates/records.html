@@ -1,0 +1,85 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="headline-row">
+    <h1>打刻履歴</h1>
+    <p class="muted">{{ period_start }} ~ {{ period_end }}</p>
+  </div>
+
+  {% if flash_error %}
+  <p class="alert alert--error">{{ flash_error }}</p>
+  {% endif %}
+  {% if flash_message %}
+  <p class="alert alert--ok">{{ flash_message }}</p>
+  {% endif %}
+
+  <form method="get" action="/records" class="filter-row">
+    <label>対象月
+      <input type="month" name="period" value="{{ period }}" />
+    </label>
+    <label>開始日
+      <input type="date" name="from_date" value="{{ period_start }}" />
+    </label>
+    <label>終了日
+      <input type="date" name="to_date" value="{{ period_end }}" />
+    </label>
+    <button class="btn btn--primary" type="submit">表示</button>
+  </form>
+
+  <table class="table records-table">
+    <thead>
+      <tr>
+        <th>日付</th>
+        <th>出勤</th>
+        <th>退勤</th>
+        <th>外出</th>
+        <th>戻り</th>
+        <th>就業</th>
+        <th>備考</th>
+        <th>修正</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in rows %}
+      <tr class="row-{{ row.classification }} {% for f in row.flags %}flag-{{ f }} {% endfor %}">
+        <td>{{ row.date }} ({{ row.weekday }})</td>
+        <td>{{ row.clock_in or '-' }}</td>
+        <td>{{ row.clock_out or '-' }}</td>
+        <td>{{ row.outing or '-' }}</td>
+        <td>{{ row.return or '-' }}</td>
+        <td>{{ row.worked_hhmm }}</td>
+        <td>{{ row.note or '-' }}</td>
+        <td>
+          <details>
+            <summary>編集</summary>
+            <form method="post" action="/records/{{ row.date }}" class="edit-grid">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <label>出勤
+                <input type="datetime-local" name="clock_in_at" value="{{ (row.date ~ 'T' ~ row.clock_in) if row.clock_in else '' }}" />
+              </label>
+              <label>退勤
+                <input type="datetime-local" name="clock_out_at" value="{{ (row.date ~ 'T' ~ row.clock_out) if row.clock_out else '' }}" />
+              </label>
+              <label>外出
+                <input type="datetime-local" name="outing_at" value="{{ (row.date ~ 'T' ~ row.outing) if row.outing else '' }}" />
+              </label>
+              <label>戻り
+                <input type="datetime-local" name="return_at" value="{{ (row.date ~ 'T' ~ row.return) if row.return else '' }}" />
+              </label>
+              <label class="wide">備考
+                <input type="text" name="note" value="{{ row.note }}" maxlength="240" />
+              </label>
+              <button class="btn btn--small btn--primary" type="submit">保存</button>
+            </form>
+          </details>
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="8">データがありません</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

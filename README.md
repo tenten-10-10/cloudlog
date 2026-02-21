@@ -229,3 +229,88 @@ SELinuxでvolume書込失敗: docker compose ... logs -f cloudlog で Permission
 補足:
 この作業環境では docker が無いため、コンテナ実起動の疎通確認までは未実施です。
 Python側は compileall で構文確認済みです。
+
+## Cloudlog Time Clock v1 (Google Sheets backend)
+
+`cloudlog` は FastAPI + Starlette を維持したまま、出退勤打刻中心のアプリに改修しました。
+本番構成（OCI VM + Docker Compose + Gunicorn(Uvicorn worker) + Caddy）は変更しません。
+
+### 実装範囲
+- 認証: email + password
+- Remember me: HttpOnly/Secure クッキーで長期セッションを保持（パスワード保存なし）
+- 権限: `admin` / `user`（管理画面はサーバー側で強制ガード）
+- 打刻: 出勤 / 退勤 / 外出 / 戻り
+- 履歴: 期間表示、日次編集、修正反映
+- 休暇: 申請、管理者承認/却下
+- 管理: ユーザー管理、勤務設定、月次サマリー、CSV出力
+
+### Google Sheets スキーマ（固定）
+同一スプレッドシート内に次のシートを作成します（アプリ起動時に自動生成/補正）。
+
+1. `Users`
+2. `Settings`
+3. `Events`
+4. `LeaveRequests`
+5. `Holidays`
+6. `SummaryCache`
+
+列定義は `cloudlog/timeclock_store.py` の `SHEETS_SCHEMA` に固定されています。
+
+### Google Sheets 認証設定（OCI / ローカル共通）
+1. Google Cloud で Service Account を作成
+2. Google Sheets API を有効化
+3. Service Account JSON キーを発行
+4. 対象スプレッドシートを Service Account メールへ共有
+5. アプリへ設定（どちらか）
+   - `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/google_service_account.json`
+   - または `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64=<base64(JSON)>`
+6. `GOOGLE_SHEETS_SPREADSHEET_ID=<spreadsheet key>` を設定
+
+### 休日データ取得方針
+- `holidays` Python ライブラリを利用して日本の祝日を自動取得
+- 取得結果は `Holidays` シートへキャッシュ
+- 起動時および設定更新時に `当年±1年` を対象に更新
+- 会社独自休日は `Settings.company_custom_holidays_json` から同シートに統合
+
+### ローカル起動（Docker compose本番構成を使った確認）
+```bash
+cp .env.cloudlog.example .env.cloudlog
+# 必須値を編集: CLOUDLOG_SECRET_KEY / GOOGLE_SHEETS_SPREADSHEET_ID / 認証情報
+
+docker compose -f docker-compose.cloudlog.prod.yml up -d --build
+```
+
+### デプロイ反映メモ（人手実行）
+```bash
+git pull
+docker compose -f docker-compose.cloudlog.prod.yml up -d --build
+```
+
+### OCI 側確認コマンド
+```bash
+ssh -i ~/.ssh/oci_cloudlog.key opc@161.33.193.237
+
+cd /home/opc/cloudlog-app
+docker compose ps
+docker compose logs --tail=200 -f
+docker compose exec cloudlog python -c "print('ok')"
+curl -I https://cloudlog.showashokai.com/
+```
+
+### 固定CSV列順
+`/admin/export.csv` は以下固定順で出力します。
+
+1. 組織
+2. 関連エリア
+3. 氏名
+4. 日付
+5. 曜日
+6. 始業時刻
+7. 遅刻事由
+8. 外出
+9. 戻り
+10. 終業時刻
+11. 早退事由
+12. 欠勤事由
+13. 備考
+14. 修正区分

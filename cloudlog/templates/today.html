@@ -1,0 +1,75 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="headline-row">
+    <div>
+      <h1>本日の打刻</h1>
+      <p class="muted">{{ today }} / サーバー時刻(JST)基準</p>
+    </div>
+    <div class="status-pill status-pill--{{ status }}">{{ status }}</div>
+  </div>
+
+  {% if flash_error %}
+  <p class="alert alert--error">{{ flash_error }}</p>
+  {% endif %}
+  {% if flash_message %}
+  <p class="alert alert--ok">{{ flash_message }}</p>
+  {% endif %}
+
+  <div class="today-grid">
+    <article class="metric-card">
+      <h2>今期就業</h2>
+      <p>{{ minutes_to_hhmm(summary.work_minutes) }}</p>
+    </article>
+    <article class="metric-card">
+      <h2>残業</h2>
+      <p>{{ minutes_to_hhmm(summary.overtime_minutes) }}</p>
+    </article>
+    <article class="metric-card">
+      <h2>未入力</h2>
+      <p>{{ summary.missing_count }}日</p>
+    </article>
+  </div>
+
+  <div class="clock-buttons">
+    <form method="post" action="/events/clock-in">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <button class="btn btn--xl btn--in" type="submit">出勤</button>
+    </form>
+    <form method="post" action="/events/clock-out">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <button class="btn btn--xl btn--out" type="submit">退勤</button>
+    </form>
+  </div>
+
+  <div class="secondary-actions">
+    <form method="post" action="/events/outing">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <button class="btn btn--small" type="submit">外出</button>
+    </form>
+    <form method="post" action="/events/return">
+      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+      <button class="btn btn--small" type="submit">戻り</button>
+    </form>
+  </div>
+
+  <dl class="today-detail">
+    <div>
+      <dt>出勤</dt>
+      <dd>{{ record.clock_in or '-' }}</dd>
+    </div>
+    <div>
+      <dt>退勤</dt>
+      <dd>{{ record.clock_out or '-' }}</dd>
+    </div>
+    <div>
+      <dt>外出</dt>
+      <dd>{{ record.outing or '-' }}</dd>
+    </div>
+    <div>
+      <dt>戻り</dt>
+      <dd>{{ record.return or '-' }}</dd>
+    </div>
+  </dl>
+</section>
+{% endblock %}

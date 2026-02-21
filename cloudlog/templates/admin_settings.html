@@ -1,0 +1,84 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>管理設定</h1>
+
+  {% if flash_error %}
+  <p class="alert alert--error">{{ flash_error }}</p>
+  {% endif %}
+  {% if flash_message %}
+  <p class="alert alert--ok">{{ flash_message }}</p>
+  {% endif %}
+
+  <form method="post" action="/admin/settings" class="form-grid form-grid--wide">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+
+    <label>締め日 (1..31)
+      <input type="number" name="payroll_cutoff_day" min="1" max="31" value="{{ settings.payroll_cutoff_day }}" required />
+    </label>
+
+    <label>始業時刻
+      <input type="time" name="scheduled_start_time" value="{{ settings.scheduled_start_time }}" required />
+    </label>
+
+    <label>終業時刻
+      <input type="time" name="scheduled_end_time" value="{{ settings.scheduled_end_time }}" required />
+    </label>
+
+    <label>所定労働(分)
+      <input type="number" name="scheduled_work_minutes" min="0" value="{{ settings.scheduled_work_minutes }}" required />
+    </label>
+
+    <label>猶予(分)
+      <input type="number" name="grace_minutes" min="0" value="{{ settings.grace_minutes }}" required />
+    </label>
+
+    <label>休憩ポリシー
+      <select name="break_policy_type">
+        <option value="fixed" {% if settings.break_policy_type == 'fixed' %}selected{% endif %}>固定</option>
+        <option value="tiered" {% if settings.break_policy_type == 'tiered' %}selected{% endif %}>段階</option>
+      </select>
+    </label>
+
+    <label>固定休憩(分)
+      <input type="number" name="break_fixed_minutes" min="0" value="{{ settings.break_fixed_minutes }}" />
+    </label>
+
+    <label class="wide">段階休憩JSON
+      <textarea name="break_tier_json" rows="2">{{ settings.break_tier_json | tojson }}</textarea>
+    </label>
+
+    <label class="wide">勤務曜日JSON (0=Mon..6=Sun)
+      <input type="text" name="working_weekdays_json" value='{{ settings.working_weekdays_json | tojson }}' />
+    </label>
+
+    <label>週末勤務を休出扱い
+      <select name="weekend_work_counts_as_holiday_work">
+        <option value="1" {% if settings.weekend_work_counts_as_holiday_work %}selected{% endif %}>する</option>
+        <option value="0" {% if not settings.weekend_work_counts_as_holiday_work %}selected{% endif %}>しない</option>
+      </select>
+    </label>
+
+    <label>有休承認モード
+      <select name="paid_leave_approval_mode">
+        <option value="require_admin" {% if settings.paid_leave_approval_mode == 'require_admin' %}selected{% endif %}>管理者承認</option>
+        <option value="auto_approve" {% if settings.paid_leave_approval_mode == 'auto_approve' %}selected{% endif %}>自動承認</option>
+      </select>
+    </label>
+
+    <label class="wide">特別休暇タイプ（カンマ区切り）
+      <input type="text" name="special_leave_types" value="{{ settings.special_leave_types_json | join(',') }}" />
+    </label>
+
+    <label class="wide">会社指定有給日（YYYY-MM-DD, カンマ区切り）
+      <textarea name="company_designated_paid_leave_dates" rows="2">{{ settings.company_designated_paid_leave_dates_json | join(',') }}</textarea>
+    </label>
+
+    <label class="wide">会社独自休日（YYYY-MM-DD, カンマ区切り）
+      <textarea name="company_custom_holidays" rows="2">{{ settings.company_custom_holidays_json | join(',') }}</textarea>
+    </label>
+
+    <button class="btn btn--primary" type="submit">設定を保存</button>
+  </form>
+</section>
+{% endblock %}

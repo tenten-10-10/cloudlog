@@ -1,18 +1,28 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="panel narrow">
+<section class="panel panel--narrow login-panel">
   <h1>ログイン</h1>
-  {% if error %}<p class="error">{{ error }}</p>{% endif %}
-  <form method="post" action="/login" class="form-grid">
+  {% if error %}
+  <p class="alert alert--error">{{ error }}</p>
+  {% endif %}
+  <form method="post" action="/auth/login" class="form-grid">
     <input type="hidden" name="next" value="{{ next }}" />
-    <label>ユーザー名
-      <input type="text" name="username" autocomplete="username" required />
+
+    <label>メールアドレス
+      <input type="email" name="email" value="{{ saved_email }}" autocomplete="username" required />
     </label>
+
     <label>パスワード
       <input type="password" name="password" autocomplete="current-password" required />
     </label>
-    <button class="btn" type="submit">ログイン</button>
+
+    <label class="checkbox-row">
+      <input type="checkbox" name="remember" value="1" />
+      <span>ログイン状態を保持する（Remember me）</span>
+    </label>
+
+    <button class="btn btn--primary" type="submit">ログイン</button>
   </form>
-  <p class="hint">初期管理者: <code>admin / admin1234</code></p>
+  <p class="hint">保存されるのはログイン用セッションのみです。パスワードは保存しません。</p>
 </section>
 {% endblock %}

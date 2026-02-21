@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <h1>ユーザー管理</h1>
+
+  {% if flash_error %}
+  <p class="alert alert--error">{{ flash_error }}</p>
+  {% endif %}
+  {% if flash_message %}
+  <p class="alert alert--ok">{{ flash_message }}</p>
+  {% endif %}
+
+  <form method="post" action="/admin/users" class="form-grid">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    <label>メール
+      <input type="email" name="email" required />
+    </label>
+    <label>氏名
+      <input type="text" name="name" required />
+    </label>
+    <label>初期パスワード
+      <input type="password" name="password" required minlength="8" />
+    </label>
+    <label>ロール
+      <select name="role">
+        <option value="user">user</option>
+        <option value="admin">admin</option>
+      </select>
+    </label>
+    <label>状態
+      <select name="is_active">
+        <option value="1">有効</option>
+        <option value="0">無効</option>
+      </select>
+    </label>
+    <button class="btn btn--primary" type="submit">作成</button>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>ユーザー一覧</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>氏名</th>
+        <th>メール</th>
+        <th>ロール</th>
+        <th>状態</th>
+        <th>更新</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for u in users %}
+      <tr>
+        <td>{{ u.name }}</td>
+        <td>{{ u.email }}</td>
+        <td>{{ u.role }}</td>
+        <td>{{ '有効' if u.is_active else '無効' }}</td>
+        <td>
+          <details>
+            <summary>編集</summary>
+            <form method="post" action="/admin/users/{{ u.user_id }}" class="edit-grid">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <label>氏名
+                <input type="text" name="name" value="{{ u.name }}" required />
+              </label>
+              <label>ロール
+                <select name="role">
+                  <option value="user" {% if u.role == 'user' %}selected{% endif %}>user</option>
+                  <option value="admin" {% if u.role == 'admin' %}selected{% endif %}>admin</option>
+                </select>
+              </label>
+              <label>状態
+                <select name="is_active">
+                  <option value="1" {% if u.is_active %}selected{% endif %}>有効</option>
+                  <option value="0" {% if not u.is_active %}selected{% endif %}>無効</option>
+                </select>
+              </label>
+              <label>新しいパスワード（任意）
+                <input type="password" name="password" minlength="8" />
+              </label>
+              <button class="btn btn--small btn--primary" type="submit">保存</button>
+            </form>
+          </details>
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="5">ユーザーがいません</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}

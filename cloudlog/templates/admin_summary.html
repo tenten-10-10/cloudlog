@@ -1,0 +1,151 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel">
+  <div class="headline-row">
+    <h1>集計・承認</h1>
+    <p class="muted">{{ period_start }} ~ {{ period_end }}</p>
+  </div>
+
+  {% if flash_error %}
+  <p class="alert alert--error">{{ flash_error }}</p>
+  {% endif %}
+  {% if flash_message %}
+  <p class="alert alert--ok">{{ flash_message }}</p>
+  {% endif %}
+
+  <form method="get" action="/admin/summary" class="filter-row">
+    <label>対象月
+      <input type="month" name="period" value="{{ period }}" />
+    </label>
+    <label>対象ユーザー
+      <select name="user_id">
+        <option value="">全員</option>
+        {% for u in users %}
+        <option value="{{ u.user_id }}" {% if selected_user_id == u.user_id %}selected{% endif %}>{{ u.name }} ({{ u.email }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button class="btn btn--primary" type="submit">表示</button>
+    <a class="btn btn--ghost" href="/admin/export.csv?period={{ period }}{% if selected_user_id %}&user={{ selected_user_id }}{% endif %}">CSV出力</a>
+  </form>
+</section>
+
+<section class="panel">
+  <h2>月次サマリー</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>氏名</th>
+        <th>就業</th>
+        <th>残業</th>
+        <th>休出</th>
+        <th>遅刻</th>
+        <th>早退</th>
+        <th>欠勤</th>
+        <th>特別</th>
+        <th>有休</th>
+        <th>会社指定有給</th>
+        <th>その他</th>
+        <th>未入力</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for item in summaries %}
+      <tr>
+        <td>{{ item.user.name }}</td>
+        <td>{{ item.summary.work_days }}日 / {{ minutes_to_hhmm(item.summary.work_minutes) }}</td>
+        <td>{{ item.summary.overtime_days }}日 / {{ minutes_to_hhmm(item.summary.overtime_minutes) }}</td>
+        <td>{{ item.summary.holiday_work_days }}日 / {{ minutes_to_hhmm(item.summary.holiday_work_minutes) }}</td>
+        <td>{{ item.summary.lateness_count }}</td>
+        <td>{{ item.summary.early_leave_count }}</td>
+        <td>{{ item.summary.absence_count }}</td>
+        <td>{{ item.summary.special_leave_count }}</td>
+        <td>{{ item.summary.paid_leave_count }}</td>
+        <td>{{ item.summary.company_designated_paid_leave_count }}</td>
+        <td>{{ item.summary.other_count }}</td>
+        <td>{{ item.summary.missing_count }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="12">データがありません</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>休暇申請 承認キュー</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>日付</th>
+        <th>ユーザー</th>
+        <th>種別</th>
+        <th>名称</th>
+        <th>状態</th>
+        <th>操作</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for row in leave_requests %}
+      <tr>
+        <td>{{ row.leave_date }}</td>
+        <td>{{ row.user_id }}</td>
+        <td>{{ row.leave_type }}</td>
+        <td>{{ row.leave_name }}</td>
+        <td>{{ row.status }}</td>
+        <td>
+          {% if row.status == 'PENDING' %}
+          <div class="row-actions">
+            <form method="post" action="/leave-requests/{{ row.leave_id }}/approve">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <button class="btn btn--small btn--primary" type="submit">承認</button>
+            </form>
+            <form method="post" action="/leave-requests/{{ row.leave_id }}/reject">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <button class="btn btn--small" type="submit">却下</button>
+            </form>
+          </div>
+          {% else %}
+          -
+          {% endif %}
+        </td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="6">休暇申請はありません</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+
+<section class="panel">
+  <h2>異常値</h2>
+  <table class="table">
+    <thead>
+      <tr>
+        <th>ユーザー</th>
+        <th>未入力</th>
+        <th>残業</th>
+        <th>遅刻</th>
+      </tr>
+    </thead>
+    <tbody>
+      {% for a in anomalies %}
+      <tr>
+        <td>{{ a.user.name }}</td>
+        <td>{{ a.missing_count }}</td>
+        <td>{{ a.overtime_hhmm }}</td>
+        <td>{{ a.lateness_count }}</td>
+      </tr>
+      {% else %}
+      <tr>
+        <td colspan="4">異常値はありません</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</section>
+{% endblock %}
