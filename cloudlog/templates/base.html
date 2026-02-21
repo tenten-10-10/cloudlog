@@ -16,20 +16,21 @@
 
         {% if current_user %}
         <nav class="nav">
-          <a href="/today">本日</a>
-          <a href="/records">打刻履歴</a>
-          <a href="/leave">休暇申請</a>
+          {% set path = request.url.path %}
+          <a class="nav__link {% if path == '/today' %}is-active{% endif %}" href="/today">本日</a>
+          <a class="nav__link {% if path.startswith('/records') %}is-active{% endif %}" href="/records">打刻履歴</a>
+          <a class="nav__link {% if path.startswith('/leave') %}is-active{% endif %}" href="/leave">休暇申請</a>
           {% if current_user.role == ROLE_ADMIN %}
-          <a href="/admin/summary">集計・承認</a>
-          <a href="/admin/users">ユーザー管理</a>
-          <a href="/admin/settings">管理設定</a>
+          <a class="nav__link {% if path.startswith('/admin/summary') %}is-active{% endif %}" href="/admin/summary">集計・承認</a>
+          <a class="nav__link {% if path.startswith('/admin/users') %}is-active{% endif %}" href="/admin/users">ユーザー管理</a>
+          <a class="nav__link {% if path.startswith('/admin/settings') %}is-active{% endif %}" href="/admin/settings">管理設定</a>
           {% endif %}
         </nav>
         {% endif %}
 
         <div class="user-tools">
           {% if current_user %}
-          <span class="chip">{{ current_user.name }} ({{ current_user.role }})</span>
+          <span class="user-badge">{{ current_user.name }} / {{ current_user.role }}</span>
           {% endif %}
         </div>
       </div>

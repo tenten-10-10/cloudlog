@@ -1,98 +1,138 @@
 {% extends "base.html" %}
 {% block content %}
+{% set primary_mode = "出勤" %}
+{% set primary_action = "clock-in" %}
+{% set primary_endpoint = "/events/clock-in" %}
+{% if status == "出勤済" %}
+  {% set primary_mode = "退勤" %}
+  {% set primary_action = "clock-out" %}
+  {% set primary_endpoint = "/events/clock-out" %}
+{% elif status == "退勤済" %}
+  {% set primary_mode = "完了" %}
+  {% set primary_action = "done" %}
+  {% set primary_endpoint = "/events/clock-out" %}
+{% endif %}
+
 <section class="panel today-hero">
   <div class="today-hero__grid">
-    <div class="today-hero__left">
-      <p class="kicker">Today / JST</p>
-      <h1>本日の打刻</h1>
-      <p class="muted">{{ today }}</p>
-      <div class="status-pill" id="today-status">{{ status }}</div>
+    <article class="today-main">
+      <div class="headline-row">
+        <div>
+          <p class="kicker">Today / JST</p>
+          <h1>本日の打刻</h1>
+          <p class="muted">{{ today }}</p>
+        </div>
+        <span class="status-pill" id="today-status">{{ status }}</span>
+      </div>
 
       <div class="clock-face">
         <p class="clock-caption">現在時刻</p>
         <p class="live-clock live-clock--hero" id="live-clock" aria-live="polite">--:--:--</p>
         <p class="clock-subtext" id="live-clock-date">----</p>
-        <div class="toast-stack" id="clock-toast-region" aria-live="polite" aria-atomic="false"></div>
-      </div>
-    </div>
 
-    <div class="today-hero__right">
-      <div class="clock-buttons clock-buttons--hero">
-        <form method="post" action="/events/clock-in" data-clock-action="clock-in">
+        <form
+          method="post"
+          action="{{ primary_endpoint }}"
+          class="primary-clock-form"
+          id="primary-clock-form"
+          data-clock-action="{{ primary_action }}"
+        >
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-          <button class="btn btn--xl btn--in" type="submit">出勤</button>
-        </form>
-        <form method="post" action="/events/clock-out" data-clock-action="clock-out">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-          <button class="btn btn--xl btn--out" type="submit">退勤</button>
-        </form>
-      </div>
-
-      <div class="secondary-actions">
-        <form method="post" action="/events/outing" data-clock-action="outing">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-          <button class="btn btn--small" type="submit">外出</button>
-        </form>
-        <form method="post" action="/events/return" data-clock-action="return">
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-          <button class="btn btn--small" type="submit">戻り</button>
+          <button class="btn btn--xl btn--primary-clock" id="primary-clock-btn" type="submit" {% if primary_action == 'done' %}disabled{% endif %}>
+            打刻
+          </button>
+          <p class="primary-clock-meta">
+            打刻対象: <strong id="primary-clock-mode">{{ primary_mode }}</strong>
+          </p>
         </form>
       </div>
+    </article>
 
-      <div
-        id="today-flash"
-        data-message="{{ flash_message or '' }}"
-        data-error="{{ flash_error or '' }}"
-        hidden
-      ></div>
+    <div class="today-side">
+      <section class="today-times-card" aria-label="今日の打刻時刻">
+        <h2>今日の打刻時刻</h2>
+        <dl class="today-times-grid">
+          <div>
+            <dt>出勤</dt>
+            <dd id="clock-in-value">{{ record.clock_in or '—' }}</dd>
+            <p class="today-times-sub" id="clock-in-sub">{{ '記録済み' if record.clock_in else '未打刻' }}</p>
+          </div>
+          <div>
+            <dt>退勤</dt>
+            <dd id="clock-out-value">{{ record.clock_out or '—' }}</dd>
+            <p class="today-times-sub" id="clock-out-sub">{{ '記録済み' if record.clock_out else '未打刻' }}</p>
+          </div>
+        </dl>
+      </section>
+
+      <details class="outing-log">
+        <summary>外出 / 戻り（必要時に確認）</summary>
+        <div class="outing-log__body">
+          <div class="outing-lists">
+            <section>
+              <h3>外出</h3>
+              <ul class="time-list" id="outing-list">
+                <li class="time-list__empty">記録なし</li>
+              </ul>
+            </section>
+            <section>
+              <h3>戻り</h3>
+              <ul class="time-list" id="return-list">
+                <li class="time-list__empty">記録なし</li>
+              </ul>
+            </section>
+          </div>
+
+          <div class="secondary-actions secondary-actions--sub">
+            <form method="post" action="/events/outing" data-clock-action="outing">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <button class="btn btn--small btn--ghost" type="submit">外出</button>
+            </form>
+            <form method="post" action="/events/return" data-clock-action="return">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+              <button class="btn btn--small btn--ghost" type="submit">戻り</button>
+            </form>
+          </div>
+        </div>
+      </details>
     </div>
   </div>
 </section>
 
-<section class="panel">
-  <div class="today-grid">
-    <article class="metric-card">
+<section class="panel kpi-panel">
+  <div class="kpi-strip" role="list" aria-label="今期サマリー">
+    <article class="kpi-item" role="listitem">
       <h2>今期就業</h2>
       <p>{{ minutes_to_hhmm(summary.work_minutes) }}</p>
     </article>
-    <article class="metric-card">
+    <article class="kpi-item" role="listitem">
       <h2>残業</h2>
       <p>{{ minutes_to_hhmm(summary.overtime_minutes) }}</p>
     </article>
-    <article class="metric-card">
+    <article class="kpi-item" role="listitem">
       <h2>未入力</h2>
       <p>{{ summary.missing_count }}日</p>
     </article>
   </div>
-
-  <dl class="today-detail">
-    <div>
-      <dt>出勤</dt>
-      <dd id="clock-in-value">{{ record.clock_in or '-' }}</dd>
-    </div>
-    <div>
-      <dt>退勤</dt>
-      <dd id="clock-out-value">{{ record.clock_out or '-' }}</dd>
-    </div>
-    <div>
-      <dt>外出</dt>
-      <dd id="outing-value">{{ record.outing or '-' }}</dd>
-    </div>
-    <div>
-      <dt>戻り</dt>
-      <dd id="return-value">{{ record.return or '-' }}</dd>
-    </div>
-  </dl>
 </section>
+
+<div id="today-flash" data-message="{{ flash_message or '' }}" data-error="{{ flash_error or '' }}" hidden></div>
+<script id="today-events-json" type="application/json">{{ (record.events or []) | tojson }}</script>
+<div class="toast-viewport" id="clock-toast-region" aria-live="polite" aria-atomic="false"></div>
 
 <script>
   (() => {
     const clockEl = document.getElementById("live-clock");
     const dateEl = document.getElementById("live-clock-date");
-    const toastRegion = document.getElementById("clock-toast-region");
     const flashNode = document.getElementById("today-flash");
+    const toastRegion = document.getElementById("clock-toast-region");
     const statusEl = document.getElementById("today-status");
+    const primaryForm = document.getElementById("primary-clock-form");
+    const primaryButton = document.getElementById("primary-clock-btn");
+    const primaryMode = document.getElementById("primary-clock-mode");
+    const eventsNode = document.getElementById("today-events-json");
     const forms = document.querySelectorAll("form[data-clock-action]");
+
     if (!clockEl || !dateEl || !toastRegion || !forms.length) return;
 
     const clockFmt = new Intl.DateTimeFormat("ja-JP", {
@@ -109,13 +149,19 @@
       day: "2-digit",
       weekday: "short",
     });
+    const ymdFmt = new Intl.DateTimeFormat("ja-JP", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+    });
 
     const escapeHtml = (text) =>
       String(text || "")
         .replaceAll("&", "&amp;")
         .replaceAll("<", "&lt;")
         .replaceAll(">", "&gt;")
-        .replaceAll("\"", "&quot;")
+        .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
 
     const showToast = (message, kind = "ok") => {
@@ -137,37 +183,111 @@
       window.setTimeout(remove, 3800);
     };
 
-    const formatEventTime = (iso) => {
-      if (!iso) return "";
+    const parseTime = (iso) => {
+      if (!iso) return null;
       const dt = new Date(iso);
-      if (Number.isNaN(dt.getTime())) return "";
-      return clockFmt.format(dt);
+      if (Number.isNaN(dt.getTime())) return null;
+      return dt;
+    };
+
+    const formatTime = (iso) => {
+      const dt = parseTime(iso);
+      return dt ? clockFmt.format(dt) : "";
+    };
+
+    const formatEventStamp = (iso) => {
+      const dt = parseTime(iso);
+      if (!dt) return "";
+      return `${ymdFmt.format(dt).replaceAll("/", "-")} ${clockFmt.format(dt)}`;
+    };
+
+    const setTimeCell = (valueId, subId, value) => {
+      const valueNode = document.getElementById(valueId);
+      const subNode = document.getElementById(subId);
+      const filled = Boolean(value);
+      if (valueNode) valueNode.textContent = filled ? value : "—";
+      if (subNode) subNode.textContent = filled ? "記録済み" : "未打刻";
+    };
+
+    const syncPrimaryAction = (status) => {
+      if (!primaryForm || !primaryButton || !primaryMode) return;
+      if (status === "未出勤") {
+        primaryForm.action = "/events/clock-in";
+        primaryForm.dataset.clockAction = "clock-in";
+        primaryButton.disabled = false;
+        primaryMode.textContent = "出勤";
+        return;
+      }
+      if (status === "出勤済") {
+        primaryForm.action = "/events/clock-out";
+        primaryForm.dataset.clockAction = "clock-out";
+        primaryButton.disabled = false;
+        primaryMode.textContent = "退勤";
+        return;
+      }
+      primaryForm.dataset.clockAction = "done";
+      primaryButton.disabled = true;
+      primaryMode.textContent = "完了";
+    };
+
+    const renderTimeList = (id, values) => {
+      const target = document.getElementById(id);
+      if (!target) return;
+      target.innerHTML = "";
+      if (!values.length) {
+        const li = document.createElement("li");
+        li.className = "time-list__empty";
+        li.textContent = "記録なし";
+        target.appendChild(li);
+        return;
+      }
+      values.forEach((value) => {
+        const li = document.createElement("li");
+        li.className = "time-list__item";
+        li.textContent = value;
+        target.appendChild(li);
+      });
+    };
+
+    const renderOutingReturn = (events) => {
+      const outing = [];
+      const returning = [];
+      (Array.isArray(events) ? events : []).forEach((ev) => {
+        const time = formatTime(ev?.event_time);
+        if (!time) return;
+        if (ev?.event_type === "OUTING") outing.push(time);
+        if (ev?.event_type === "RETURN") returning.push(time);
+      });
+      renderTimeList("outing-list", outing);
+      renderTimeList("return-list", returning);
     };
 
     const patchTodayView = async () => {
-      const res = await fetch("/attendance/today", {
-        headers: { Accept: "application/json" },
-      });
+      const res = await fetch("/attendance/today", { headers: { Accept: "application/json" } });
       if (!res.ok) return;
       const payload = await res.json();
       if (!payload?.ok) return;
 
       if (statusEl && payload.status) statusEl.textContent = payload.status;
+      syncPrimaryAction(payload.status || "");
+
       const rec = payload.record || {};
-      const setText = (id, value) => {
-        const node = document.getElementById(id);
-        if (node) node.textContent = value || "-";
-      };
-      setText("clock-in-value", rec.clock_in);
-      setText("clock-out-value", rec.clock_out);
-      setText("outing-value", rec.outing);
-      setText("return-value", rec.return);
+      setTimeCell("clock-in-value", "clock-in-sub", rec.clock_in);
+      setTimeCell("clock-out-value", "clock-out-sub", rec.clock_out);
+      renderOutingReturn(rec.events || []);
     };
 
     const submitClock = async (form) => {
+      const actionKind = form.dataset.clockAction || "";
+      if (actionKind === "done") {
+        showToast("本日の打刻は完了しています", "error");
+        return;
+      }
+
       const submit = form.querySelector("button[type='submit']");
       if (submit) submit.disabled = true;
       form.classList.add("is-submitting");
+
       try {
         const res = await fetch(form.action, {
           method: "POST",
@@ -181,14 +301,13 @@
           return;
         }
 
-        const eventTime = formatEventTime(payload?.event?.event_time);
-        const detail = eventTime ? ` (${eventTime})` : "";
-        showToast(`打刻しました${detail}`, "ok");
+        const stamp = formatEventStamp(payload?.event?.event_time);
+        showToast(stamp ? `打刻しました: ${stamp}` : "打刻しました", "ok");
         await patchTodayView();
       } catch (_err) {
         showToast("打刻に失敗しました", "error");
       } finally {
-        if (submit) submit.disabled = false;
+        if (submit && actionKind !== "done") submit.disabled = false;
         form.classList.remove("is-submitting");
       }
     };
@@ -208,6 +327,15 @@
 
     tick();
     window.setInterval(tick, 1000);
+
+    let initialEvents = [];
+    try {
+      initialEvents = JSON.parse(eventsNode?.textContent || "[]");
+    } catch (_err) {
+      initialEvents = [];
+    }
+    renderOutingReturn(initialEvents);
+    syncPrimaryAction(statusEl?.textContent || "");
 
     const initialMessage = flashNode?.dataset?.message || "";
     const initialError = flashNode?.dataset?.error || "";
