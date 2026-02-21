@@ -81,6 +81,10 @@ def _parse_trusted_proxies(raw: str) -> list[str] | str:
     return out if out else ["127.0.0.1"]
 
 
+def _parse_hidden_user_emails(raw: str | None) -> set[str]:
+    return {part.strip().lower() for part in str(raw or "").split(",") if part.strip()}
+
+
 def _safe_next(next_path: str | None) -> str:
     if not next_path:
         return "/today"
@@ -223,7 +227,7 @@ def _wants_json(request: Request) -> bool:
     return "application/json" in accept or "application/json" in content_type
 
 
-app = FastAPI(title="Cloudlog Time Clock")
+app = FastAPI(title="SHOWA TIME CARD")
 app.mount("/static", StaticFiles(directory=str(Path(__file__).parent / "static")), name="static")
 templates = _resolve_templates()
 store = TimeclockStore.from_env()
@@ -237,6 +241,7 @@ _remember_days = int((os.getenv("CLOUDLOG_REMEMBER_MAX_AGE_DAYS", "30") or "30")
 _remember_cookie = "cloudlog_remember"
 _saved_email_cookie = "cloudlog_saved_email"
 _serializer = URLSafeTimedSerializer(_session_secret, salt="cloudlog-remember")
+_hidden_user_emails = _parse_hidden_user_emails(os.getenv("CLOUDLOG_HIDDEN_USER_EMAILS", ""))
 
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_proxies)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
@@ -332,6 +337,19 @@ def _require_admin(request: Request) -> dict[str, Any]:
     if ROLE_ORDER.get(user["role"], 0) < ROLE_ORDER[ROLE_ADMIN]:
         raise HTTPException(status_code=403)
     return user
+
+
+def _is_hidden_user(user: dict[str, Any]) -> bool:
+    if not _hidden_user_emails:
+        return False
+    email = str(user.get("email") or "").strip().lower()
+    return email in _hidden_user_emails
+
+
+def _visible_users(users: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    if not _hidden_user_emails:
+        return users
+    return [u for u in users if not _is_hidden_user(u)]
 
 
 def _render(request: Request, template_name: str, context: dict[str, Any], *, status_code: int = 200) -> HTMLResponse:
@@ -756,7 +774,7 @@ async def reject_leave_form(request: Request, leave_id: str):
 @app.get("/admin/users", response_class=HTMLResponse)
 def admin_users_page(request: Request):
     _require_admin(request)
-    users = store.list_users()
+    users = _visible_users(store.list_users())
     if _wants_json(request):
         return JSONResponse(content={"ok": True, "users": users})
     return _render(
@@ -794,7 +812,8 @@ def admin_summary_page(request: Request, period: str | None = None, user_id: str
     period_start, period_end = store.get_payroll_period_by_month(month_key)
     summaries = store.summary_for_period(user_id=user_id, period_start=period_start, period_end=period_end)
     leaves = store.list_leave_requests(user_id=None)
-    users = store.list_users()
+    users = _visible_users(store.list_users())
+    summaries = [item for item in summaries if not _is_hidden_user(item["user"])]
 
     anomaly_rows: list[dict[str, Any]] = []
     for item in summaries:
@@ -975,7 +994,7 @@ def admin_export_csv(request: Request, period: str | None = None, user: str | No
     month_key = _parse_month(period, _jst_today())
     period_start, period_end = store.get_payroll_period_by_month(month_key)
 
-    users = store.list_users()
+    users = _visible_users(store.list_users())
     target_users = [u for u in users if u["is_active"]]
     if user:
         target_users = [u for u in target_users if u["user_id"] == user]

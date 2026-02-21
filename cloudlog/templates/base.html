@@ -3,7 +3,7 @@
   <head>
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <title>{{ title or "Cloudlog Time Clock" }}</title>
+    <title>{{ title or "SHOWA TIME CARD" }}</title>
     <link rel="stylesheet" href="/static/style.css" />
   </head>
   <body>
@@ -11,7 +11,7 @@
       <div class="shell topbar__inner">
         <a class="brand" href="/today">
           <span class="brand__dot" aria-hidden="true"></span>
-          <span>Cloudlog Time Clock</span>
+          <span>SHOWA TIME CARD</span>
         </a>
 
         {% if current_user %}
@@ -30,10 +30,6 @@
         <div class="user-tools">
           {% if current_user %}
           <span class="chip">{{ current_user.name }} ({{ current_user.role }})</span>
-          <form method="post" action="/auth/logout">
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-            <button class="btn btn--ghost" type="submit">ログアウト</button>
-          </form>
           {% endif %}
         </div>
       </div>
@@ -42,5 +38,21 @@
     <main class="shell">
       {% block content %}{% endblock %}
     </main>
+
+    <footer class="site-footer">
+      <div class="shell site-footer__inner">
+        <div class="footer-links">
+          {% if current_user %}
+          <form method="post" action="/auth/logout" class="footer-inline-form">
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+            <button class="footer-link" type="submit">ログアウト</button>
+          </form>
+          {% else %}
+          <a class="footer-link" href="/login">ログイン</a>
+          {% endif %}
+        </div>
+        <p class="copyright">© 2026 SHOWASHOKAI Co., Ltd. All Rights Reserved.</p>
+      </div>
+    </footer>
   </body>
 </html>

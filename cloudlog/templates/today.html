@@ -4,9 +4,10 @@
   <div class="headline-row">
     <div>
       <h1>本日の打刻</h1>
-      <p class="muted">{{ today }} / サーバー時刻(JST)基準</p>
+      <p class="muted">{{ today }} / JST</p>
+      <p class="live-clock" id="live-clock" aria-live="polite">--:--:--</p>
     </div>
-    <div class="status-pill status-pill--{{ status }}">{{ status }}</div>
+    <div class="status-pill">{{ status }}</div>
   </div>
 
   {% if flash_error %}
@@ -72,4 +73,27 @@
     </div>
   </dl>
 </section>
+
+<script>
+  (() => {
+    const el = document.getElementById("live-clock");
+    if (!el) return;
+    const fmt = new Intl.DateTimeFormat("ja-JP", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "short",
+      hour: "2-digit",
+      minute: "2-digit",
+      second: "2-digit",
+      hour12: false,
+    });
+    const tick = () => {
+      el.textContent = fmt.format(new Date()).replaceAll("/", "-");
+    };
+    tick();
+    window.setInterval(tick, 1000);
+  })();
+</script>
 {% endblock %}
