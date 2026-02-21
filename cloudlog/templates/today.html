@@ -1,22 +1,55 @@
 {% extends "base.html" %}
 {% block content %}
-<section class="panel">
-  <div class="headline-row">
-    <div>
+<section class="panel today-hero">
+  <div class="today-hero__grid">
+    <div class="today-hero__left">
+      <p class="kicker">Today / JST</p>
       <h1>本日の打刻</h1>
-      <p class="muted">{{ today }} / JST</p>
-      <p class="live-clock" id="live-clock" aria-live="polite">--:--:--</p>
+      <p class="muted">{{ today }}</p>
+      <div class="status-pill" id="today-status">{{ status }}</div>
+
+      <div class="clock-face">
+        <p class="clock-caption">現在時刻</p>
+        <p class="live-clock live-clock--hero" id="live-clock" aria-live="polite">--:--:--</p>
+        <p class="clock-subtext" id="live-clock-date">----</p>
+        <div class="toast-stack" id="clock-toast-region" aria-live="polite" aria-atomic="false"></div>
+      </div>
     </div>
-    <div class="status-pill">{{ status }}</div>
+
+    <div class="today-hero__right">
+      <div class="clock-buttons clock-buttons--hero">
+        <form method="post" action="/events/clock-in" data-clock-action="clock-in">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+          <button class="btn btn--xl btn--in" type="submit">出勤</button>
+        </form>
+        <form method="post" action="/events/clock-out" data-clock-action="clock-out">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+          <button class="btn btn--xl btn--out" type="submit">退勤</button>
+        </form>
+      </div>
+
+      <div class="secondary-actions">
+        <form method="post" action="/events/outing" data-clock-action="outing">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+          <button class="btn btn--small" type="submit">外出</button>
+        </form>
+        <form method="post" action="/events/return" data-clock-action="return">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+          <button class="btn btn--small" type="submit">戻り</button>
+        </form>
+      </div>
+
+      <div
+        id="today-flash"
+        data-message="{{ flash_message or '' }}"
+        data-error="{{ flash_error or '' }}"
+        hidden
+      ></div>
+    </div>
   </div>
+</section>
 
-  {% if flash_error %}
-  <p class="alert alert--error">{{ flash_error }}</p>
-  {% endif %}
-  {% if flash_message %}
-  <p class="alert alert--ok">{{ flash_message }}</p>
-  {% endif %}
-
+<section class="panel">
   <div class="today-grid">
     <article class="metric-card">
       <h2>今期就業</h2>
@@ -32,68 +65,154 @@
     </article>
   </div>
 
-  <div class="clock-buttons">
-    <form method="post" action="/events/clock-in">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-      <button class="btn btn--xl btn--in" type="submit">出勤</button>
-    </form>
-    <form method="post" action="/events/clock-out">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-      <button class="btn btn--xl btn--out" type="submit">退勤</button>
-    </form>
-  </div>
-
-  <div class="secondary-actions">
-    <form method="post" action="/events/outing">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-      <button class="btn btn--small" type="submit">外出</button>
-    </form>
-    <form method="post" action="/events/return">
-      <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-      <button class="btn btn--small" type="submit">戻り</button>
-    </form>
-  </div>
-
   <dl class="today-detail">
     <div>
       <dt>出勤</dt>
-      <dd>{{ record.clock_in or '-' }}</dd>
+      <dd id="clock-in-value">{{ record.clock_in or '-' }}</dd>
     </div>
     <div>
       <dt>退勤</dt>
-      <dd>{{ record.clock_out or '-' }}</dd>
+      <dd id="clock-out-value">{{ record.clock_out or '-' }}</dd>
     </div>
     <div>
       <dt>外出</dt>
-      <dd>{{ record.outing or '-' }}</dd>
+      <dd id="outing-value">{{ record.outing or '-' }}</dd>
     </div>
     <div>
       <dt>戻り</dt>
-      <dd>{{ record.return or '-' }}</dd>
+      <dd id="return-value">{{ record.return or '-' }}</dd>
     </div>
   </dl>
 </section>
 
 <script>
   (() => {
-    const el = document.getElementById("live-clock");
-    if (!el) return;
-    const fmt = new Intl.DateTimeFormat("ja-JP", {
+    const clockEl = document.getElementById("live-clock");
+    const dateEl = document.getElementById("live-clock-date");
+    const toastRegion = document.getElementById("clock-toast-region");
+    const flashNode = document.getElementById("today-flash");
+    const statusEl = document.getElementById("today-status");
+    const forms = document.querySelectorAll("form[data-clock-action]");
+    if (!clockEl || !dateEl || !toastRegion || !forms.length) return;
+
+    const clockFmt = new Intl.DateTimeFormat("ja-JP", {
       timeZone: "Asia/Tokyo",
-      year: "numeric",
-      month: "2-digit",
-      day: "2-digit",
-      weekday: "short",
       hour: "2-digit",
       minute: "2-digit",
       second: "2-digit",
       hour12: false,
     });
-    const tick = () => {
-      el.textContent = fmt.format(new Date()).replaceAll("/", "-");
+    const dateFmt = new Intl.DateTimeFormat("ja-JP", {
+      timeZone: "Asia/Tokyo",
+      year: "numeric",
+      month: "2-digit",
+      day: "2-digit",
+      weekday: "short",
+    });
+
+    const escapeHtml = (text) =>
+      String(text || "")
+        .replaceAll("&", "&amp;")
+        .replaceAll("<", "&lt;")
+        .replaceAll(">", "&gt;")
+        .replaceAll("\"", "&quot;")
+        .replaceAll("'", "&#039;");
+
+    const showToast = (message, kind = "ok") => {
+      if (!message) return;
+      const toast = document.createElement("div");
+      toast.className = `toast toast--${kind}`;
+      toast.innerHTML = `
+        <p>${escapeHtml(message)}</p>
+        <button type="button" class="toast__close" aria-label="閉じる">×</button>
+      `;
+      toastRegion.appendChild(toast);
+
+      const remove = () => {
+        toast.classList.add("toast--closing");
+        window.setTimeout(() => toast.remove(), 180);
+      };
+
+      toast.querySelector(".toast__close")?.addEventListener("click", remove);
+      window.setTimeout(remove, 3800);
     };
+
+    const formatEventTime = (iso) => {
+      if (!iso) return "";
+      const dt = new Date(iso);
+      if (Number.isNaN(dt.getTime())) return "";
+      return clockFmt.format(dt);
+    };
+
+    const patchTodayView = async () => {
+      const res = await fetch("/attendance/today", {
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) return;
+      const payload = await res.json();
+      if (!payload?.ok) return;
+
+      if (statusEl && payload.status) statusEl.textContent = payload.status;
+      const rec = payload.record || {};
+      const setText = (id, value) => {
+        const node = document.getElementById(id);
+        if (node) node.textContent = value || "-";
+      };
+      setText("clock-in-value", rec.clock_in);
+      setText("clock-out-value", rec.clock_out);
+      setText("outing-value", rec.outing);
+      setText("return-value", rec.return);
+    };
+
+    const submitClock = async (form) => {
+      const submit = form.querySelector("button[type='submit']");
+      if (submit) submit.disabled = true;
+      form.classList.add("is-submitting");
+      try {
+        const res = await fetch(form.action, {
+          method: "POST",
+          body: new FormData(form),
+          headers: { Accept: "application/json" },
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || !payload?.ok) {
+          const reason = payload?.error ? `: ${payload.error}` : "";
+          showToast(`打刻に失敗しました${reason}`, "error");
+          return;
+        }
+
+        const eventTime = formatEventTime(payload?.event?.event_time);
+        const detail = eventTime ? ` (${eventTime})` : "";
+        showToast(`打刻しました${detail}`, "ok");
+        await patchTodayView();
+      } catch (_err) {
+        showToast("打刻に失敗しました", "error");
+      } finally {
+        if (submit) submit.disabled = false;
+        form.classList.remove("is-submitting");
+      }
+    };
+
+    forms.forEach((form) => {
+      form.addEventListener("submit", (event) => {
+        event.preventDefault();
+        submitClock(form);
+      });
+    });
+
+    const tick = () => {
+      const now = new Date();
+      clockEl.textContent = clockFmt.format(now);
+      dateEl.textContent = dateFmt.format(now).replaceAll("/", ".");
+    };
+
     tick();
     window.setInterval(tick, 1000);
+
+    const initialMessage = flashNode?.dataset?.message || "";
+    const initialError = flashNode?.dataset?.error || "";
+    if (initialMessage) showToast(initialMessage, "ok");
+    if (initialError) showToast(initialError, "error");
   })();
 </script>
 {% endblock %}
