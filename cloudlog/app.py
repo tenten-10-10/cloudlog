@@ -157,6 +157,31 @@ def _fmt_hhmm_dt(dt: datetime | None) -> str:
     return dt.astimezone(JST).strftime("%H:%M")
 
 
+def _normalize_day_record_for_ui(record: dict[str, Any]) -> dict[str, Any]:
+    rec = dict(record)
+    rec["clock_in"] = (
+        str(rec.get("clock_in") or "")
+        or str(rec.get("clock_in_label") or "")
+        or _fmt_hhmm(str(rec.get("clock_in_at") or ""))
+    )
+    rec["clock_out"] = (
+        str(rec.get("clock_out") or "")
+        or str(rec.get("clock_out_label") or "")
+        or _fmt_hhmm(str(rec.get("clock_out_at") or ""))
+    )
+    rec["outing"] = (
+        str(rec.get("outing") or "")
+        or str(rec.get("outing_label") or "")
+        or _fmt_hhmm(str(rec.get("outing_at") or ""))
+    )
+    rec["return"] = (
+        str(rec.get("return") or "")
+        or str(rec.get("return_label") or "")
+        or _fmt_hhmm(str(rec.get("return_at") or ""))
+    )
+    return rec
+
+
 def _parse_datetime_local(raw: str | None) -> datetime | None:
     text = str(raw or "").strip()
     if not text:
@@ -444,14 +469,14 @@ def home(request: Request):
 def today_page(request: Request):
     user = _require_user(request)
     target = _jst_today()
-    rec = store.get_day_record(user_id=user["user_id"], target_date=target)
+    rec = _normalize_day_record_for_ui(store.get_day_record(user_id=user["user_id"], target_date=target))
     month_start, month_end = store.get_payroll_period(anchor=target)
     _, summary = store.daily_records(user_id=user["user_id"], period_start=month_start, period_end=month_end)
 
     status = "未出勤"
-    if rec["clock_in"] and not rec["clock_out"]:
+    if rec.get("clock_in") and not rec.get("clock_out"):
         status = "出勤済"
-    elif rec["clock_in"] and rec["clock_out"]:
+    elif rec.get("clock_in") and rec.get("clock_out"):
         status = "退勤済"
 
     return _render(
@@ -474,11 +499,11 @@ def today_page(request: Request):
 def attendance_today(request: Request):
     user = _require_user(request)
     target = _jst_today()
-    rec = store.get_day_record(user_id=user["user_id"], target_date=target)
+    rec = _normalize_day_record_for_ui(store.get_day_record(user_id=user["user_id"], target_date=target))
     status = "未出勤"
-    if rec["clock_in"] and not rec["clock_out"]:
+    if rec.get("clock_in") and not rec.get("clock_out"):
         status = "出勤済"
-    elif rec["clock_in"] and rec["clock_out"]:
+    elif rec.get("clock_in") and rec.get("clock_out"):
         status = "退勤済"
     return {"ok": True, "date": target.isoformat(), "status": status, "record": rec}
 
