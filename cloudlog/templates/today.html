@@ -39,22 +39,26 @@
       </div>
 
       <div class="clock-face">
-        <p class="clock-caption">現在時刻</p>
-        <p class="live-clock live-clock--hero" id="live-clock" aria-live="polite">--:--:--</p>
-        <p class="clock-subtext" id="live-clock-date">----</p>
+        <div class="clock-hero-row">
+          <div class="clock-main">
+            <p class="clock-caption">現在時刻</p>
+            <p class="live-clock live-clock--hero" id="live-clock" aria-live="polite">--:--:--</p>
+            <p class="clock-subtext" id="live-clock-date">----</p>
+          </div>
 
-        <form
-          method="post"
-          action="{{ primary_endpoint }}"
-          class="primary-clock-form"
-          id="primary-clock-form"
-          data-clock-action="{{ primary_action }}"
-        >
-          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-          <button class="btn btn--xl btn--primary-clock" id="primary-clock-btn" type="submit" {% if primary_action == 'done' %}disabled{% endif %}>
-            {{ '本日の打刻完了' if primary_action == 'done' else primary_mode }}
-          </button>
-        </form>
+          <form
+            method="post"
+            action="{{ primary_endpoint }}"
+            class="primary-clock-form"
+            id="primary-clock-form"
+            data-clock-action="{{ primary_action }}"
+          >
+            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+            <button class="btn btn--xl btn--primary-clock" id="primary-clock-btn" type="submit" {% if primary_action == 'done' %}disabled{% endif %}>
+              {{ '本日の打刻完了' if primary_action == 'done' else primary_mode }}
+            </button>
+          </form>
+        </div>
       </div>
     </article>
 
