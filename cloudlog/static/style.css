@@ -154,6 +154,20 @@ h2 {
   grid-template-columns: 1fr;
 }
 
+.login-panel .form-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+.login-panel .checkbox-row {
+  align-items: flex-start;
+}
+
+.login-panel .btn {
+  width: 100%;
+}
+
 .form-grid--wide {
   grid-template-columns: repeat(auto-fit, minmax(210px, 1fr));
 }
