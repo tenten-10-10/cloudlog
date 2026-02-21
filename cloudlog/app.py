@@ -214,14 +214,6 @@ _saved_email_cookie = "cloudlog_saved_email"
 _serializer = URLSafeTimedSerializer(_session_secret, salt="cloudlog-remember")
 
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_proxies)
-app.add_middleware(
-    SessionMiddleware,
-    secret_key=_session_secret,
-    session_cookie="cloudlog_session",
-    https_only=_https_only,
-    same_site="lax",
-    max_age=_session_max_age,
-)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
 
 
@@ -278,6 +270,16 @@ async def _auth_middleware(request: Request, call_next):  # type: ignore
 
     request.state.current_user = user
     return await call_next(request)
+
+
+app.add_middleware(
+    SessionMiddleware,
+    secret_key=_session_secret,
+    session_cookie="cloudlog_session",
+    https_only=_https_only,
+    same_site="lax",
+    max_age=_session_max_age,
+)
 
 
 def _password_signature(password_hash: str) -> str:
