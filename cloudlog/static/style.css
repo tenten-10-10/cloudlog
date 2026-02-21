@@ -1104,7 +1104,10 @@ main.shell {
 
 .nav__link.is-disabled,
 .mobile-nav__link.is-disabled {
-  opacity: 0.48;
+  opacity: 0.5;
+  color: #7b8f84;
+  background: rgba(245, 248, 246, 0.92);
+  border-color: rgba(112, 132, 121, 0.25);
   cursor: not-allowed;
   pointer-events: none;
   box-shadow: none;
@@ -1137,6 +1140,12 @@ main.shell {
 .today-main,
 .today-side {
   min-width: 0;
+}
+
+.today-side {
+  display: grid;
+  gap: 0.66rem;
+  align-content: start;
 }
 
 .clock-face {
@@ -1187,6 +1196,12 @@ main.shell {
 
 .primary-clock-form {
   display: grid;
+}
+
+.hero-toast-slot {
+  margin-top: 0.6rem;
+  display: grid;
+  gap: 0.5rem;
 }
 
 .btn--primary-clock {
@@ -1264,22 +1279,46 @@ main.shell {
 }
 
 .outing-log {
-  margin-top: 0.66rem;
   border-radius: 14px;
   border: 1px solid rgba(42, 90, 61, 0.14);
   background: rgba(252, 254, 252, 0.88);
   padding: 0.62rem;
 }
 
-.outing-log summary {
+.outing-log__summary {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
   color: #3c604c;
   font-size: 0.81rem;
   font-weight: 700;
   cursor: pointer;
+  user-select: none;
+}
+
+.outing-log__summary:hover {
+  color: #27513a;
+}
+
+.accordion-chevron {
+  width: 10px;
+  height: 10px;
+  border-right: 2px solid #4f6b5c;
+  border-bottom: 2px solid #4f6b5c;
+  transform: rotate(45deg);
+  transition: transform 0.16s ease;
+  margin-left: 0.4rem;
+}
+
+.outing-log[open] .accordion-chevron {
+  transform: rotate(-135deg);
 }
 
 .outing-log__body {
   margin-top: 0.56rem;
+  max-height: 280px;
+  overflow: auto;
+  padding-right: 0.1rem;
 }
 
 .outing-lists {
@@ -1328,7 +1367,7 @@ main.shell {
 
 .kpi-item {
   border-radius: 12px;
-  border: 1px dashed rgba(41, 102, 67, 0.24);
+  border: 1px solid rgba(41, 102, 67, 0.18);
   background: rgba(251, 254, 252, 0.74);
   padding: 0.48rem 0.56rem;
 }
@@ -1347,29 +1386,14 @@ main.shell {
   color: #2f5842;
 }
 
-.toast-viewport {
-  position: fixed;
-  right: 18px;
-  bottom: 18px;
-  z-index: 60;
-  display: grid;
-  gap: 0.5rem;
-  width: min(360px, calc(100vw - 1.6rem));
-  pointer-events: none;
-}
-
-.toast-viewport .toast {
-  pointer-events: auto;
-}
-
 /* ---- Mobile drawer navigation ---- */
 .menu-toggle {
   display: none;
-  width: 40px;
-  height: 40px;
-  border-radius: 12px;
+  width: 56px;
+  height: 56px;
+  border-radius: 999px;
   border: 1px solid rgba(34, 86, 56, 0.24);
-  background: rgba(255, 255, 255, 0.9);
+  background: linear-gradient(180deg, rgba(250, 254, 251, 0.95), rgba(236, 247, 241, 0.94));
   padding: 0;
   align-items: center;
   justify-content: center;
@@ -1387,7 +1411,7 @@ main.shell {
 
 .menu-toggle:hover {
   border-color: rgba(32, 89, 58, 0.42);
-  background: rgba(242, 250, 246, 0.95);
+  background: rgba(242, 250, 246, 0.98);
 }
 
 .mobile-backdrop {
@@ -1404,15 +1428,16 @@ main.shell {
 .mobile-drawer {
   position: fixed;
   top: 0;
-  left: 0;
+  right: 0;
+  left: auto;
   height: 100vh;
   width: min(84vw, 320px);
   z-index: 59;
-  border-right: 1px solid rgba(31, 80, 52, 0.18);
+  border-left: 1px solid rgba(31, 80, 52, 0.18);
   background: linear-gradient(180deg, rgba(255, 255, 255, 0.97), rgba(242, 250, 246, 0.95));
   box-shadow: 0 18px 44px rgba(6, 26, 16, 0.28);
   padding: 0.92rem 0.86rem;
-  transform: translateX(-105%);
+  transform: translateX(105%);
   transition: transform 0.18s ease;
   display: flex;
   flex-direction: column;
@@ -1568,6 +1593,11 @@ body.drawer-open {
 
   .menu-toggle {
     display: inline-flex;
+    position: fixed;
+    right: 16px;
+    bottom: 18px;
+    z-index: 72;
+    box-shadow: 0 12px 24px rgba(16, 60, 37, 0.24);
   }
 
   .live-clock--hero {
@@ -1584,12 +1614,6 @@ body.drawer-open {
     grid-template-columns: 1fr;
   }
 
-  .toast-viewport {
-    left: 50%;
-    right: auto;
-    transform: translateX(-50%);
-    width: min(92vw, 360px);
-  }
 }
 
 @media (max-width: 520px) {

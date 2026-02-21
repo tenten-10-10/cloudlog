@@ -60,6 +60,7 @@
           </form>
         </div>
       </div>
+      <div class="hero-toast-slot" id="clock-toast-region" aria-live="polite" aria-atomic="false"></div>
     </article>
 
     <div class="today-side">
@@ -80,7 +81,10 @@
       </section>
 
       <details class="outing-log">
-        <summary>外出 / 戻り（必要時に確認）</summary>
+        <summary class="outing-log__summary">
+          <span>外出 / 戻り</span>
+          <span class="accordion-chevron" aria-hidden="true"></span>
+        </summary>
         <div class="outing-log__body">
           <div class="outing-lists">
             <section>
@@ -140,7 +144,6 @@
 
 <div id="today-flash" data-message="{{ flash_message or '' }}" data-error="{{ flash_error or '' }}" hidden></div>
 <script id="today-events-json" type="application/json">{{ (record.events or []) | tojson }}</script>
-<div class="toast-viewport" id="clock-toast-region" aria-live="polite" aria-atomic="false"></div>
 
 <script>
   (() => {
@@ -360,7 +363,14 @@
         }
 
         const stamp = formatEventStamp(payload?.event?.event_time);
-        showToast(stamp ? `打刻しました: ${stamp}` : "打刻しました", "ok");
+        const actionLabelMap = {
+          "clock-in": "出勤を記録しました",
+          "clock-out": "退勤を記録しました",
+          outing: "外出を記録しました",
+          return: "戻りを記録しました",
+        };
+        const actionLabel = actionLabelMap[actionKind] || "打刻しました";
+        showToast(stamp ? `${actionLabel} ${stamp}` : actionLabel, "ok");
         await patchTodayView();
       } catch (_err) {
         showToast("打刻に失敗しました", "error");
