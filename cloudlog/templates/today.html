@@ -13,6 +13,19 @@
   {% set primary_endpoint = "/events/clock-out" %}
 {% endif %}
 
+{% set secondary_mode = "外出" %}
+{% set secondary_action = "outing" %}
+{% set secondary_endpoint = "/events/outing" %}
+{% if status != "出勤済" %}
+  {% set secondary_mode = "外出/戻り" %}
+  {% set secondary_action = "disabled" %}
+  {% set secondary_endpoint = "/events/outing" %}
+{% elif is_outing_now %}
+  {% set secondary_mode = "戻り" %}
+  {% set secondary_action = "return" %}
+  {% set secondary_endpoint = "/events/return" %}
+{% endif %}
+
 <section class="panel today-hero">
   <div class="today-hero__grid">
     <article class="today-main">
@@ -39,11 +52,8 @@
         >
           <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
           <button class="btn btn--xl btn--primary-clock" id="primary-clock-btn" type="submit" {% if primary_action == 'done' %}disabled{% endif %}>
-            打刻
+            {{ '本日の打刻完了' if primary_action == 'done' else primary_mode }}
           </button>
-          <p class="primary-clock-meta">
-            打刻対象: <strong id="primary-clock-mode">{{ primary_mode }}</strong>
-          </p>
         </form>
       </div>
     </article>
@@ -84,13 +94,21 @@
           </div>
 
           <div class="secondary-actions secondary-actions--sub">
-            <form method="post" action="/events/outing" data-clock-action="outing">
+            <form
+              method="post"
+              action="{{ secondary_endpoint }}"
+              id="secondary-action-form"
+              data-clock-action="{{ secondary_action }}"
+            >
               <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-              <button class="btn btn--small btn--ghost" type="submit">外出</button>
-            </form>
-            <form method="post" action="/events/return" data-clock-action="return">
-              <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-              <button class="btn btn--small btn--ghost" type="submit">戻り</button>
+              <button
+                class="btn btn--small btn--ghost"
+                id="secondary-action-btn"
+                type="submit"
+                {% if secondary_action == 'disabled' %}disabled{% endif %}
+              >
+                {{ secondary_mode }}
+              </button>
             </form>
           </div>
         </div>
@@ -129,7 +147,8 @@
     const statusEl = document.getElementById("today-status");
     const primaryForm = document.getElementById("primary-clock-form");
     const primaryButton = document.getElementById("primary-clock-btn");
-    const primaryMode = document.getElementById("primary-clock-mode");
+    const secondaryForm = document.getElementById("secondary-action-form");
+    const secondaryButton = document.getElementById("secondary-action-btn");
     const eventsNode = document.getElementById("today-events-json");
     const forms = document.querySelectorAll("form[data-clock-action]");
 
@@ -209,25 +228,55 @@
       if (subNode) subNode.textContent = filled ? "記録済み" : "未打刻";
     };
 
+    const isOutingNow = (events) => {
+      const travel = (Array.isArray(events) ? events : [])
+        .filter((ev) => ev?.event_type === "OUTING" || ev?.event_type === "RETURN")
+        .sort((a, b) => String(a?.event_time || "").localeCompare(String(b?.event_time || "")));
+      if (!travel.length) return false;
+      return travel[travel.length - 1].event_type === "OUTING";
+    };
+
     const syncPrimaryAction = (status) => {
-      if (!primaryForm || !primaryButton || !primaryMode) return;
+      if (!primaryForm || !primaryButton) return;
       if (status === "未出勤") {
         primaryForm.action = "/events/clock-in";
         primaryForm.dataset.clockAction = "clock-in";
         primaryButton.disabled = false;
-        primaryMode.textContent = "出勤";
+        primaryButton.textContent = "出勤";
         return;
       }
       if (status === "出勤済") {
         primaryForm.action = "/events/clock-out";
         primaryForm.dataset.clockAction = "clock-out";
         primaryButton.disabled = false;
-        primaryMode.textContent = "退勤";
+        primaryButton.textContent = "退勤";
         return;
       }
       primaryForm.dataset.clockAction = "done";
       primaryButton.disabled = true;
-      primaryMode.textContent = "完了";
+      primaryButton.textContent = "本日の打刻完了";
+    };
+
+    const syncSecondaryAction = (status, events) => {
+      if (!secondaryForm || !secondaryButton) return;
+      if (status !== "出勤済") {
+        secondaryForm.action = "/events/outing";
+        secondaryForm.dataset.clockAction = "disabled";
+        secondaryButton.textContent = "外出/戻り";
+        secondaryButton.disabled = true;
+        return;
+      }
+
+      if (isOutingNow(events)) {
+        secondaryForm.action = "/events/return";
+        secondaryForm.dataset.clockAction = "return";
+        secondaryButton.textContent = "戻り";
+      } else {
+        secondaryForm.action = "/events/outing";
+        secondaryForm.dataset.clockAction = "outing";
+        secondaryButton.textContent = "外出";
+      }
+      secondaryButton.disabled = false;
     };
 
     const renderTimeList = (id, values) => {
@@ -270,6 +319,7 @@
 
       if (statusEl && payload.status) statusEl.textContent = payload.status;
       syncPrimaryAction(payload.status || "");
+      syncSecondaryAction(payload.status || "", payload?.record?.events || []);
 
       const rec = payload.record || {};
       setTimeCell("clock-in-value", "clock-in-sub", rec.clock_in);
@@ -281,6 +331,10 @@
       const actionKind = form.dataset.clockAction || "";
       if (actionKind === "done") {
         showToast("本日の打刻は完了しています", "error");
+        return;
+      }
+      if (actionKind === "disabled") {
+        showToast("勤務中のみ操作できます", "error");
         return;
       }
 
@@ -307,7 +361,7 @@
       } catch (_err) {
         showToast("打刻に失敗しました", "error");
       } finally {
-        if (submit && actionKind !== "done") submit.disabled = false;
+        if (submit && actionKind !== "done" && actionKind !== "disabled") submit.disabled = false;
         form.classList.remove("is-submitting");
       }
     };
@@ -336,6 +390,7 @@
     }
     renderOutingReturn(initialEvents);
     syncPrimaryAction(statusEl?.textContent || "");
+    syncSecondaryAction(statusEl?.textContent || "", initialEvents);
 
     const initialMessage = flashNode?.dataset?.message || "";
     const initialError = flashNode?.dataset?.error || "";

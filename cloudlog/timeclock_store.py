@@ -714,8 +714,12 @@ class TimeclockStore:
         record = self.get_day_record(user_id=user_id, target_date=today)
         has_in = bool(record["clock_in_at"])
         has_out = bool(record["clock_out_at"])
-        has_outing = bool(record["outing_at"])
-        has_return = bool(record["return_at"])
+        travel_events = [
+            ev
+            for ev in sorted(record.get("events", []), key=lambda ev: str(ev.get("event_time") or ""))
+            if str(ev.get("event_type") or "") in {EVENT_OUTING, EVENT_RETURN}
+        ]
+        is_outing_now = bool(travel_events) and str(travel_events[-1].get("event_type") or "") == EVENT_OUTING
 
         if action == EVENT_IN:
             if has_in:
@@ -734,16 +738,16 @@ class TimeclockStore:
                 return False, "clock_in_required"
             if has_out:
                 return False, "already_clocked_out"
-            if has_outing and not has_return:
+            if is_outing_now:
                 return False, "already_outing"
             return True, ""
         if action == EVENT_RETURN:
-            if not has_outing:
-                return False, "outing_required"
-            if has_return:
-                return False, "already_returned"
+            if not has_in:
+                return False, "clock_in_required"
             if has_out:
                 return False, "already_clocked_out"
+            if not is_outing_now:
+                return False, "outing_required"
             return True, ""
         return False, "invalid_action"
 

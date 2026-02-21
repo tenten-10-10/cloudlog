@@ -186,6 +186,16 @@ def _normalize_day_record_for_ui(record: dict[str, Any]) -> dict[str, Any]:
     return rec
 
 
+def _is_currently_outing(events: list[dict[str, Any]] | None) -> bool:
+    timeline = sorted(
+        [ev for ev in (events or []) if str(ev.get("event_type") or "") in {EVENT_OUTING, EVENT_RETURN}],
+        key=lambda ev: str(ev.get("event_time") or ""),
+    )
+    if not timeline:
+        return False
+    return str(timeline[-1].get("event_type") or "") == EVENT_OUTING
+
+
 def _parse_datetime_local(raw: str | None) -> datetime | None:
     text = str(raw or "").strip()
     if not text:
@@ -496,6 +506,7 @@ def today_page(request: Request):
         status = "出勤済"
     elif rec.get("clock_in") and rec.get("clock_out"):
         status = "退勤済"
+    is_outing_now = status == "出勤済" and _is_currently_outing(rec.get("events"))
 
     return _render(
         request,
@@ -507,6 +518,7 @@ def today_page(request: Request):
             "month_start": month_start.isoformat(),
             "month_end": month_end.isoformat(),
             "summary": summary,
+            "is_outing_now": is_outing_now,
             "flash_error": str(request.query_params.get("error") or ""),
             "flash_message": str(request.query_params.get("msg") or ""),
         },
@@ -523,7 +535,8 @@ def attendance_today(request: Request):
         status = "出勤済"
     elif rec.get("clock_in") and rec.get("clock_out"):
         status = "退勤済"
-    return {"ok": True, "date": target.isoformat(), "status": status, "record": rec}
+    is_outing_now = status == "出勤済" and _is_currently_outing(rec.get("events"))
+    return {"ok": True, "date": target.isoformat(), "status": status, "is_outing_now": is_outing_now, "record": rec}
 
 
 @app.get("/attendance", response_class=HTMLResponse)
