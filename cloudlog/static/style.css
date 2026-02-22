@@ -2524,3 +2524,179 @@ body.modal-open {
     content: none;
   }
 }
+
+/* ---- SHOWA Time Card v2 overrides ---- */
+.day-progress {
+  margin-top: 0.22rem;
+  display: grid;
+  gap: 0.3rem;
+}
+
+.day-progress__track {
+  position: relative;
+  height: 14px;
+  border-radius: 999px;
+  overflow: hidden;
+  border: 1px solid rgba(34, 89, 57, 0.18);
+  background:
+    linear-gradient(180deg, rgba(245, 252, 248, 0.96), rgba(232, 246, 238, 0.92)),
+    repeating-linear-gradient(
+      90deg,
+      rgba(73, 129, 94, 0.08) 0,
+      rgba(73, 129, 94, 0.08) 1px,
+      transparent 1px,
+      transparent calc(100% / 24)
+    );
+}
+
+.day-progress__segment {
+  position: absolute;
+  top: 0;
+  height: 100%;
+}
+
+.day-progress__segment--work {
+  background: linear-gradient(180deg, rgba(74, 184, 121, 0.95), rgba(38, 145, 90, 0.98));
+}
+
+.day-progress__segment--break {
+  background: linear-gradient(180deg, rgba(173, 199, 185, 0.86), rgba(149, 176, 161, 0.86));
+}
+
+.day-progress__segment--overtime {
+  background: linear-gradient(180deg, rgba(228, 104, 104, 0.96), rgba(194, 64, 64, 0.96));
+}
+
+.day-progress__segment--night {
+  background: linear-gradient(180deg, rgba(40, 118, 152, 0.92), rgba(27, 91, 121, 0.94));
+}
+
+.day-progress__segment--night-overtime {
+  background: linear-gradient(180deg, rgba(97, 55, 152, 0.96), rgba(70, 35, 121, 0.96));
+}
+
+.day-progress__marker {
+  position: absolute;
+  top: -2px;
+  bottom: -2px;
+  width: 2px;
+  background: #123a27;
+  box-shadow: 0 0 0 2px rgba(255, 255, 255, 0.62);
+}
+
+.day-progress__legend {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.34rem 0.58rem;
+  color: #5c7266;
+  font-size: 0.69rem;
+  font-weight: 640;
+}
+
+.day-progress__legend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+}
+
+.swatch {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  border: 1px solid rgba(26, 66, 43, 0.2);
+}
+
+.swatch--work {
+  background: #2fa163;
+}
+
+.swatch--break {
+  background: #98b2a4;
+}
+
+.swatch--overtime {
+  background: #cc5050;
+}
+
+.swatch--night {
+  background: #2a6f8f;
+}
+
+@media (min-width: 768px) {
+  nav.mobile-tabbar {
+    display: none !important;
+    visibility: hidden;
+    pointer-events: none;
+  }
+}
+
+@media (max-width: 767px) {
+  .primary-clock-form {
+    display: none !important;
+  }
+
+  .hero-toast-slot {
+    display: none;
+  }
+
+  body {
+    padding-bottom: calc(92px + env(safe-area-inset-bottom));
+  }
+
+  .site-footer {
+    margin-bottom: calc(74px + env(safe-area-inset-bottom));
+  }
+
+  .mobile-tabbar {
+    bottom: calc(8px + env(safe-area-inset-bottom));
+    height: 64px;
+    grid-template-columns: 0.95fr 0.95fr 1.2fr 0.95fr;
+    gap: 0.3rem;
+    padding: 0.4rem;
+    border-radius: 20px;
+    width: min(96vw, 430px);
+    backdrop-filter: blur(18px) saturate(155%);
+  }
+
+  .mobile-tabbar__item {
+    min-height: 42px;
+    border-radius: 10px;
+    border: none;
+    background: transparent;
+    box-shadow: none;
+    color: #3f5f50;
+    font-size: 0.7rem;
+    font-weight: 680;
+    padding: 0 0.35rem;
+  }
+
+  .mobile-tabbar__item.is-active {
+    border: 1px solid rgba(30, 94, 59, 0.28);
+    background: rgba(220, 242, 229, 0.84);
+    color: #194730;
+    box-shadow: none;
+  }
+
+  .mobile-tabbar__item--primary {
+    min-height: 54px;
+    border-radius: 999px;
+    border: 1px solid rgba(18, 88, 52, 0.68);
+    background: linear-gradient(152deg, #4dbd7d, #1f774b 72%);
+    color: #ffffff;
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 12px 24px rgba(16, 65, 39, 0.28);
+    font-size: 0.84rem;
+    font-weight: 800;
+  }
+
+  .mobile-tabbar__item--action.is-active {
+    box-shadow:
+      inset 0 1px 0 rgba(255, 255, 255, 0.2),
+      0 12px 24px rgba(16, 65, 39, 0.28);
+  }
+
+  .mobile-tabbar-toast {
+    bottom: calc(78px + env(safe-area-inset-bottom));
+  }
+}

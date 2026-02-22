@@ -254,6 +254,9 @@ Python側は compileall で構文確認済みです。
 4. `edits`
 5. `daily`
 6. `monthly`
+7. `time_events`（イベント台帳）
+8. `time_edits`（修正監査ログ）
+9. `settings`（key/value ランタイム設定）
 
 アプリ互換（既存機能維持）:
 1. `Users`
@@ -264,6 +267,7 @@ Python側は compileall で構文確認済みです。
 6. `SummaryCache`
 
 `_meta` には初期値として `timezone=Asia/Tokyo` と `closing_day_default=20` を投入します。  
+`settings` には `closingDay / requiredWorkMinutes / nightStart / nightEnd / allowMultipleClockInSameDay` の初期値を投入します。  
 列定義は `cloudlog/timeclock_store.py` の `ALL_SHEETS_SCHEMA` で管理しています。
 
 ### Google Sheets 認証設定（OCI / ローカル共通）

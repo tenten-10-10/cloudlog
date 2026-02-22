@@ -4,10 +4,16 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ title or "SHOWA TIME CARD" }}</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260222d" />
+    <link rel="stylesheet" href="/static/style.css?v=20260222e" />
     <style>
-      /* Critical fallback: prevent desktop leakage even when static CSS is stale */
+      /* Critical fallback: prevent mobile-only UI leakage on desktop */
       .mobile-tabbar {
+        display: none !important;
+        visibility: hidden;
+        pointer-events: none;
+      }
+
+      .mobile-tabbar-toast {
         display: none !important;
         visibility: hidden;
         pointer-events: none;
@@ -15,86 +21,15 @@
 
       @media (max-width: 767px) {
         .mobile-tabbar {
-          position: fixed;
-          left: 50%;
-          bottom: 12px;
-          transform: translateX(-50%);
-          width: min(96vw, 460px);
-          height: 70px;
-          z-index: 76;
           display: grid !important;
           visibility: visible;
           pointer-events: auto;
-          grid-template-columns: 0.95fr 0.9fr 1.15fr 0.95fr;
-          gap: 0.42rem;
-          align-items: center;
-          padding: 0.46rem;
-          border-radius: 999px;
-          border: 1px solid rgba(39, 94, 62, 0.24);
-          background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(238, 249, 243, 0.82));
-          backdrop-filter: blur(14px) saturate(155%);
-          box-shadow: 0 14px 34px rgba(17, 58, 36, 0.24);
-        }
-
-        .mobile-tabbar__action-form {
-          margin: 0;
-          min-width: 0;
-        }
-
-        .mobile-tabbar__item {
-          width: 100%;
-          min-height: 48px;
-          border-radius: 999px;
-          border: 1px solid rgba(36, 88, 58, 0.18);
-          background: rgba(255, 255, 255, 0.86);
-          color: #1f4f37;
-          font-size: 0.75rem;
-          font-weight: 680;
-          display: inline-flex;
-          align-items: center;
-          justify-content: center;
-          text-align: center;
-          padding: 0 0.44rem;
-          text-decoration: none;
-        }
-
-        .mobile-tabbar__item--primary {
-          min-height: 58px;
-          font-size: 0.84rem;
-          font-weight: 800;
-          border-color: rgba(18, 88, 52, 0.74);
-          background: linear-gradient(150deg, #46b875, #1f754a 72%);
-          color: #fff;
-        }
-
-        .mobile-tabbar__item--action.is-active {
-          border-color: rgba(18, 88, 52, 0.74);
-          background: linear-gradient(150deg, #46b875, #1f754a 72%);
-          color: #fff;
-          box-shadow: none;
         }
 
         .mobile-tabbar-toast {
-          position: fixed;
-          left: 50%;
-          bottom: 90px;
-          transform: translateX(-50%);
-          max-width: calc(100vw - 1.2rem);
-          z-index: 78;
-          padding: 0.44rem 0.74rem;
-          border-radius: 999px;
-          border: 1px solid rgba(26, 86, 54, 0.24);
-          background: rgba(246, 254, 249, 0.96);
-          color: #1b593a;
-          font-size: 0.78rem;
-          font-weight: 640;
-          box-shadow: 0 10px 22px rgba(13, 51, 32, 0.24);
-        }
-
-        .mobile-tabbar-toast.is-error {
-          border-color: rgba(168, 62, 62, 0.28);
-          background: rgba(255, 243, 243, 0.96);
-          color: #8a3333;
+          display: block !important;
+          visibility: visible;
+          pointer-events: auto;
         }
       }
     </style>
@@ -246,26 +181,16 @@
           }, 2400);
         };
 
-        const setMobilePunchState = (status) => {
+        const setMobilePunchState = (state) => {
           if (!mobilePunchForm || !mobilePunchBtn) return;
-          if (status === "出勤済") {
-            mobilePunchForm.action = "/events/clock-out";
-            mobilePunchForm.dataset.clockAction = "clock-out";
-            mobilePunchBtn.textContent = "退勤";
-            mobilePunchBtn.disabled = false;
-            return;
-          }
-          if (status === "退勤済") {
-            mobilePunchForm.action = "/events/clock-out";
-            mobilePunchForm.dataset.clockAction = "done";
-            mobilePunchBtn.textContent = "退勤済";
-            mobilePunchBtn.disabled = true;
-            return;
-          }
-          mobilePunchForm.action = "/events/clock-in";
-          mobilePunchForm.dataset.clockAction = "clock-in";
-          mobilePunchBtn.textContent = "出勤";
-          mobilePunchBtn.disabled = false;
+          const action = String(state?.primary_action || "clock-in");
+          const endpoint = String(state?.primary_endpoint || "/events/clock-in");
+          const label = String(state?.primary_label || (action === "clock-out" ? "退勤" : "出勤"));
+          const disabled = Boolean(state?.primary_disabled || action === "done");
+          mobilePunchForm.action = endpoint;
+          mobilePunchForm.dataset.clockAction = action;
+          mobilePunchBtn.textContent = label;
+          mobilePunchBtn.disabled = disabled;
         };
 
         const refreshMobilePunchState = async () => {
@@ -275,7 +200,7 @@
             if (!res.ok) return;
             const payload = await res.json();
             if (!payload?.ok) return;
-            setMobilePunchState(payload.status || "未出勤");
+            setMobilePunchState(payload || {});
           } catch (_err) {
             // no-op
           }

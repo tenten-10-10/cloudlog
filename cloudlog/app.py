@@ -207,7 +207,7 @@ def _event_type_label(event_type: str) -> str:
 
 
 def _recent_events_for_user(user_id: str, *, limit: int = 10) -> list[dict[str, Any]]:
-    rows = store.list_events(user_id=user_id)
+    rows = store.list_recent_events(user_id=user_id, limit=limit)
     rows = sorted(rows, key=lambda ev: ev.get("event_dt") or datetime.min.replace(tzinfo=JST), reverse=True)
     out: list[dict[str, Any]] = []
     for ev in rows[: max(1, int(limit))]:
@@ -255,6 +255,231 @@ def _work_minutes_mom(user_id: str, *, anchor: date | None = None) -> dict[str, 
         "this_total_minutes": this_total,
         "previous_total_minutes": prev_total,
         "percent_change": pct,
+    }
+
+
+def _time_text_to_minutes(raw: str, default: int) -> int:
+    text = str(raw or "").strip()
+    if ":" not in text:
+        return default
+    hh, mm = text.split(":", 1)
+    try:
+        return max(0, min(1439, int(hh) * 60 + int(mm)))
+    except Exception:
+        return default
+
+
+def _minutes_of_day(dt: datetime) -> int:
+    jst_dt = dt.astimezone(JST)
+    return max(0, min(1439, jst_dt.hour * 60 + jst_dt.minute))
+
+
+def _merge_intervals(intervals: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    if not intervals:
+        return []
+    normalized = sorted((max(0, s), min(1440, e)) for s, e in intervals if e > s)
+    if not normalized:
+        return []
+    merged: list[list[int]] = [[normalized[0][0], normalized[0][1]]]
+    for start, end in normalized[1:]:
+        tail = merged[-1]
+        if start <= tail[1]:
+            tail[1] = max(tail[1], end)
+        else:
+            merged.append([start, end])
+    return [(s, e) for s, e in merged]
+
+
+def _minutes_label(minutes_of_day: int) -> str:
+    m = max(0, min(1440, int(minutes_of_day)))
+    hh, mm = divmod(m, 60)
+    return f"{hh:02d}:{mm:02d}"
+
+
+def _split_segment_by_night(
+    *,
+    start: int,
+    end: int,
+    base_kind: str,
+    night_ranges: list[tuple[int, int]],
+) -> list[tuple[int, int, str]]:
+    if end <= start:
+        return []
+    points = {start, end}
+    for ns, ne in night_ranges:
+        if start < ns < end:
+            points.add(ns)
+        if start < ne < end:
+            points.add(ne)
+    ordered = sorted(points)
+    out: list[tuple[int, int, str]] = []
+    for idx in range(len(ordered) - 1):
+        seg_s = ordered[idx]
+        seg_e = ordered[idx + 1]
+        if seg_e <= seg_s:
+            continue
+        mid = seg_s + ((seg_e - seg_s) / 2.0)
+        in_night = any(ns <= mid < ne for ns, ne in night_ranges)
+        if base_kind == "break":
+            kind = "break"
+        elif in_night and base_kind == "overtime":
+            kind = "night-overtime"
+        elif in_night:
+            kind = "night"
+        elif base_kind == "overtime":
+            kind = "overtime"
+        else:
+            kind = "work"
+        out.append((seg_s, seg_e, kind))
+    return out
+
+
+def _build_today_progress(record: dict[str, Any], *, now_dt: datetime | None = None) -> dict[str, Any]:
+    now = (now_dt or _jst_now()).astimezone(JST)
+    runtime = store.get_runtime_policy()
+    required = max(0, int(runtime.get("required_work_minutes") or 480))
+    night_start = _time_text_to_minutes(str(runtime.get("night_start") or "22:00"), 22 * 60)
+    night_end = _time_text_to_minutes(str(runtime.get("night_end") or "05:00"), 5 * 60)
+    if night_start < night_end:
+        night_ranges = [(night_start, night_end)]
+    else:
+        night_ranges = [(0, night_end), (night_start, 1440)]
+
+    event_rows = sorted(
+        [ev for ev in (record.get("events") or []) if str(ev.get("event_type") or "") in {EVENT_IN, EVENT_OUT, EVENT_OUTING, EVENT_RETURN}],
+        key=lambda ev: str(ev.get("event_time") or ""),
+    )
+    target_day_text = str(record.get("date") or "")
+    try:
+        target_day = date.fromisoformat(target_day_text) if target_day_text else now.date()
+    except ValueError:
+        target_day = now.date()
+
+    work_intervals: list[tuple[int, int]] = []
+    break_intervals: list[tuple[int, int]] = []
+    state = "NOT_STARTED"
+    active_work_start: int | None = None
+    active_break_start: int | None = None
+
+    for ev in event_rows:
+        event_dt = ev.get("event_dt")
+        if not isinstance(event_dt, datetime):
+            event_raw = str(ev.get("event_time") or "")
+            if not event_raw:
+                continue
+            try:
+                event_dt = datetime.fromisoformat(event_raw)
+                if event_dt.tzinfo is None:
+                    event_dt = event_dt.replace(tzinfo=JST)
+            except Exception:
+                continue
+        event_dt = event_dt.astimezone(JST)
+        minute = _minutes_of_day(event_dt)
+        event_type = str(ev.get("event_type") or "")
+        if event_type == EVENT_IN:
+            state = "WORKING"
+            active_work_start = minute
+            active_break_start = None
+        elif event_type == EVENT_OUTING and state == "WORKING":
+            if active_work_start is not None and minute > active_work_start:
+                work_intervals.append((active_work_start, minute))
+            state = "OUTING"
+            active_work_start = None
+            active_break_start = minute
+        elif event_type == EVENT_RETURN and state == "OUTING":
+            if active_break_start is not None and minute > active_break_start:
+                break_intervals.append((active_break_start, minute))
+            state = "WORKING"
+            active_break_start = None
+            active_work_start = minute
+        elif event_type == EVENT_OUT and state in {"WORKING", "OUTING"}:
+            if state == "WORKING" and active_work_start is not None and minute > active_work_start:
+                work_intervals.append((active_work_start, minute))
+            elif state == "OUTING" and active_break_start is not None and minute > active_break_start:
+                break_intervals.append((active_break_start, minute))
+            state = "DONE"
+            active_work_start = None
+            active_break_start = None
+
+    if target_day == now.date():
+        now_min = _minutes_of_day(now)
+        if state == "WORKING" and active_work_start is not None and now_min > active_work_start:
+            work_intervals.append((active_work_start, now_min))
+        elif state == "OUTING" and active_break_start is not None and now_min > active_break_start:
+            break_intervals.append((active_break_start, now_min))
+    else:
+        now_min = 0
+
+    work_intervals = _merge_intervals(work_intervals)
+    break_intervals = _merge_intervals(break_intervals)
+
+    worked_total = sum(max(0, end - start) for start, end in work_intervals)
+    overtime_total = max(0, worked_total - required)
+
+    timeline: list[tuple[int, int, str]] = []
+    regular_remaining = required
+    for start, end in work_intervals:
+        duration = end - start
+        if duration <= 0:
+            continue
+        regular_chunk = min(duration, max(0, regular_remaining))
+        if regular_chunk > 0:
+            timeline.extend(_split_segment_by_night(start=start, end=start + regular_chunk, base_kind="work", night_ranges=night_ranges))
+        if duration > regular_chunk:
+            timeline.extend(_split_segment_by_night(start=start + regular_chunk, end=end, base_kind="overtime", night_ranges=night_ranges))
+        regular_remaining = max(0, regular_remaining - regular_chunk)
+
+    for start, end in break_intervals:
+        timeline.extend(_split_segment_by_night(start=start, end=end, base_kind="break", night_ranges=night_ranges))
+
+    timeline.sort(key=lambda item: (item[0], item[1]))
+    segments: list[dict[str, Any]] = []
+    for start, end, kind in timeline:
+        width = end - start
+        if width <= 0:
+            continue
+        segments.append(
+            {
+                "start_minute": start,
+                "end_minute": end,
+                "start_pct": round((start / 1440.0) * 100.0, 4),
+                "width_pct": round((width / 1440.0) * 100.0, 4),
+                "kind": kind,
+                "minutes": width,
+                "start_label": _minutes_label(start),
+                "end_label": _minutes_label(end),
+            }
+        )
+
+    return {
+        "segments": segments,
+        "now_pct": round((now_min / 1440.0) * 100.0, 4),
+        "worked_minutes": worked_total,
+        "overtime_minutes": overtime_total,
+        "required_work_minutes": required,
+        "night_start": str(runtime.get("night_start") or "22:00"),
+        "night_end": str(runtime.get("night_end") or "05:00"),
+        "has_segments": bool(segments),
+    }
+
+
+def _today_context(*, user_id: str, target: date) -> dict[str, Any]:
+    attendance = store.attendance_state(user_id=user_id, target_date=target)
+    rec = _normalize_day_record_for_ui(attendance["record"])
+    progress = _build_today_progress(rec)
+    return {
+        "record": rec,
+        "status": attendance["status"],
+        "is_outing_now": attendance["is_outing_now"],
+        "primary_action": attendance["primary_action"],
+        "primary_label": attendance["primary_label"],
+        "primary_endpoint": attendance["primary_endpoint"],
+        "primary_disabled": attendance["primary_disabled"],
+        "secondary_action": attendance["secondary_action"],
+        "secondary_label": attendance["secondary_label"],
+        "secondary_endpoint": attendance["secondary_endpoint"],
+        "secondary_disabled": attendance["secondary_disabled"],
+        "progress": progress,
     }
 
 
@@ -564,26 +789,20 @@ def home(request: Request):
 def today_page(request: Request):
     user = _require_user(request)
     target = _jst_today()
-    rec = _normalize_day_record_for_ui(store.get_day_record(user_id=user["user_id"], target_date=target))
+    today_ctx = _today_context(user_id=user["user_id"], target=target)
+    rec = today_ctx["record"]
     month_start, month_end = store.get_payroll_period_for_user(user_id=user["user_id"], anchor=target)
     _, summary = store.daily_records(user_id=user["user_id"], period_start=month_start, period_end=month_end)
     mom = _work_minutes_mom(user["user_id"], anchor=target)
     closing_day = store.get_user_closing_day(user["user_id"])
     recent_events = _recent_events_for_user(user["user_id"], limit=10)
 
-    status = "未出勤"
-    if rec.get("clock_in") and not rec.get("clock_out"):
-        status = "出勤済"
-    elif rec.get("clock_in") and rec.get("clock_out"):
-        status = "退勤済"
-    is_outing_now = status == "出勤済" and _is_currently_outing(rec.get("events"))
-
     return _render(
         request,
         "today.html",
         {
             "title": "本日の打刻",
-            "status": status,
+            "status": today_ctx["status"],
             "record": rec,
             "month_start": month_start.isoformat(),
             "month_end": month_end.isoformat(),
@@ -591,7 +810,16 @@ def today_page(request: Request):
             "closing_day": closing_day,
             "mom": mom,
             "recent_events": recent_events,
-            "is_outing_now": is_outing_now,
+            "is_outing_now": today_ctx["is_outing_now"],
+            "primary_action": today_ctx["primary_action"],
+            "primary_label": today_ctx["primary_label"],
+            "primary_endpoint": today_ctx["primary_endpoint"],
+            "primary_disabled": today_ctx["primary_disabled"],
+            "secondary_action": today_ctx["secondary_action"],
+            "secondary_label": today_ctx["secondary_label"],
+            "secondary_endpoint": today_ctx["secondary_endpoint"],
+            "secondary_disabled": today_ctx["secondary_disabled"],
+            "progress": today_ctx["progress"],
             "flash_error": str(request.query_params.get("error") or ""),
             "flash_message": str(request.query_params.get("msg") or ""),
         },
@@ -602,26 +830,30 @@ def today_page(request: Request):
 def attendance_today(request: Request):
     user = _require_user(request)
     target = _jst_today()
-    rec = _normalize_day_record_for_ui(store.get_day_record(user_id=user["user_id"], target_date=target))
+    today_ctx = _today_context(user_id=user["user_id"], target=target)
+    rec = today_ctx["record"]
     period_start, period_end = store.get_payroll_period_for_user(user_id=user["user_id"], anchor=target)
     _, summary = store.daily_records(user_id=user["user_id"], period_start=period_start, period_end=period_end)
     mom = _work_minutes_mom(user["user_id"], anchor=target)
     recent_events = _recent_events_for_user(user["user_id"], limit=10)
-    status = "未出勤"
-    if rec.get("clock_in") and not rec.get("clock_out"):
-        status = "出勤済"
-    elif rec.get("clock_in") and rec.get("clock_out"):
-        status = "退勤済"
-    is_outing_now = status == "出勤済" and _is_currently_outing(rec.get("events"))
     return {
         "ok": True,
         "date": target.isoformat(),
-        "status": status,
-        "is_outing_now": is_outing_now,
+        "status": today_ctx["status"],
+        "is_outing_now": today_ctx["is_outing_now"],
         "record": rec,
         "summary": summary,
         "mom": mom,
         "recent_events": recent_events,
+        "primary_action": today_ctx["primary_action"],
+        "primary_label": today_ctx["primary_label"],
+        "primary_endpoint": today_ctx["primary_endpoint"],
+        "primary_disabled": today_ctx["primary_disabled"],
+        "secondary_action": today_ctx["secondary_action"],
+        "secondary_label": today_ctx["secondary_label"],
+        "secondary_endpoint": today_ctx["secondary_endpoint"],
+        "secondary_disabled": today_ctx["secondary_disabled"],
+        "progress": today_ctx["progress"],
     }
 
 
@@ -944,12 +1176,14 @@ def admin_users_page(request: Request):
 def admin_settings_page(request: Request):
     _require_admin(request)
     settings = store.get_settings()
+    runtime_policy = store.get_runtime_policy()
     return _render(
         request,
         "admin_settings.html",
         {
             "title": "管理設定",
             "settings": settings,
+            "runtime_policy": runtime_policy,
             "flash_error": str(request.query_params.get("error") or ""),
             "flash_message": str(request.query_params.get("msg") or ""),
         },
@@ -1109,6 +1343,9 @@ async def admin_settings_update_form(request: Request):
         "special_leave_types_json": _parse_csv_lines(str(form.get("special_leave_types") or "慶弔,特別休暇")),
         "company_designated_paid_leave_dates_json": _parse_csv_lines(str(form.get("company_designated_paid_leave_dates") or "")),
         "company_custom_holidays_json": _parse_csv_lines(str(form.get("company_custom_holidays") or "")),
+        "night_start": str(form.get("night_start") or "22:00"),
+        "night_end": str(form.get("night_end") or "05:00"),
+        "allow_multiple_clock_in_same_day": str(form.get("allow_multiple_clock_in_same_day") or "0") == "1",
     }
 
     _update_settings_from_payload(actor_user_id=admin["user_id"], payload=payload)
@@ -1152,6 +1389,15 @@ def _update_settings_from_payload(*, actor_user_id: str, payload: dict[str, Any]
         "company_custom_holidays_json": payload.get("company_custom_holidays_json", []),
     }
     updated = store.update_settings(actor_user_id=actor_user_id, changes=changes)
+    store.update_runtime_policy(
+        changes={
+            "closing_day": int(changes["payroll_cutoff_day"]),
+            "required_work_minutes": int(changes["scheduled_work_minutes"]),
+            "night_start": str(payload.get("night_start") or "22:00"),
+            "night_end": str(payload.get("night_end") or "05:00"),
+            "allow_multiple_clock_in_same_day": _parse_bool(str(payload.get("allow_multiple_clock_in_same_day", "0")), default=False),
+        }
+    )
     store.refresh_holidays_cache(force=True)
     return updated
 

@@ -54,6 +54,7 @@ SETTINGS_SINGLETON = "singleton"
 
 JST = timezone(timedelta(hours=9))
 JP_WEEKDAYS = ["月", "火", "水", "木", "金", "土", "日"]
+DEFAULT_SPREADSHEET_URL = "https://docs.google.com/spreadsheets/d/11X9JjTC6ntkFb71SCs64pB4vQEh7HtA5gFwbdMbDM4g/edit"
 
 SHEETS_SCHEMA: dict[str, list[str]] = {
     "Users": [
@@ -188,6 +189,30 @@ OPS_SHEETS_SCHEMA: dict[str, list[str]] = {
         "overtime_minutes",
         "updated_at",
     ],
+    "time_events": [
+        "eventId",
+        "userId",
+        "eventType",
+        "timestamp",
+        "note",
+        "source",
+        "createdAt",
+        "updatedAt",
+    ],
+    "time_edits": [
+        "editId",
+        "eventId",
+        "userId",
+        "beforeJson",
+        "afterJson",
+        "reason",
+        "editedAt",
+    ],
+    "settings": [
+        "key",
+        "value",
+        "updatedAt",
+    ],
 }
 
 ALL_SHEETS_SCHEMA: dict[str, list[str]] = {
@@ -218,6 +243,15 @@ DEFAULT_SETTINGS: dict[str, Any] = {
     "holiday_cache_updated_at": "",
     "updated_by_user_id": "",
     "updated_at": "",
+}
+
+DEFAULT_RUNTIME_SETTINGS: dict[str, str] = {
+    "timezone": "Asia/Tokyo",
+    "closingDay": "20",
+    "requiredWorkMinutes": "480",
+    "nightStart": "22:00",
+    "nightEnd": "05:00",
+    "allowMultipleClockInSameDay": "false",
 }
 
 
@@ -374,6 +408,9 @@ class BaseTableGateway:
     def replace_rows(self, tab: str, rows: list[dict[str, str]]) -> None:  # pragma: no cover - interface
         raise NotImplementedError
 
+    def read_tail_rows(self, tab: str, limit: int) -> list[dict[str, str]]:  # pragma: no cover - interface
+        raise NotImplementedError
+
 
 class MemoryTableGateway(BaseTableGateway):
     def __init__(self) -> None:
@@ -387,6 +424,12 @@ class MemoryTableGateway(BaseTableGateway):
 
     def replace_rows(self, tab: str, rows: list[dict[str, str]]) -> None:
         self._rows[tab] = [dict(r) for r in rows]
+
+    def read_tail_rows(self, tab: str, limit: int) -> list[dict[str, str]]:
+        n = max(0, int(limit))
+        if n <= 0:
+            return []
+        return [dict(row) for row in self._rows[tab][-n:]]
 
 
 class GoogleSheetsGateway(BaseTableGateway):
@@ -425,8 +468,9 @@ class GoogleSheetsGateway(BaseTableGateway):
 
     def _apply_validations(self, ws, tab: str, headers: list[str]) -> None:
         rules: dict[str, list[str]] = {}
-        if tab == "events":
+        if tab in {"events", "time_events"}:
             rules["event_type"] = [EVENT_IN, EVENT_OUT, EVENT_OUTING, EVENT_RETURN]
+            rules["eventType"] = [EVENT_IN, EVENT_OUT, EVENT_OUTING, EVENT_RETURN]
         elif tab == "users":
             rules["role"] = [ROLE_ADMIN, ROLE_USER]
 
@@ -468,6 +512,14 @@ class GoogleSheetsGateway(BaseTableGateway):
     def _ws(self, tab: str):
         return self._book.worksheet(tab)
 
+    def _column_letter(self, number: int) -> str:
+        n = max(1, int(number))
+        out = ""
+        while n > 0:
+            n, rem = divmod(n - 1, 26)
+            out = chr(65 + rem) + out
+        return out
+
     def read_rows(self, tab: str) -> list[dict[str, str]]:
         ws = self._ws(tab)
         headers = ALL_SHEETS_SCHEMA[tab]
@@ -499,6 +551,26 @@ class GoogleSheetsGateway(BaseTableGateway):
         ws.clear()
         ws.update("A1", payload)
 
+    def read_tail_rows(self, tab: str, limit: int) -> list[dict[str, str]]:
+        ws = self._ws(tab)
+        headers = ALL_SHEETS_SCHEMA[tab]
+        n = max(0, int(limit))
+        if n <= 0:
+            return []
+        start_row = max(2, ws.row_count - n + 1)
+        end_row = max(start_row, ws.row_count)
+        end_col = self._column_letter(len(headers))
+        values = ws.get(f"A{start_row}:{end_col}{end_row}")
+        rows: list[dict[str, str]] = []
+        for line in values:
+            if not any(str(c).strip() for c in line):
+                continue
+            normalized = list(line) + [""] * (len(headers) - len(line))
+            rows.append({headers[i]: str(normalized[i]) for i in range(len(headers))})
+        if len(rows) > n:
+            rows = rows[-n:]
+        return rows
+
 
 class TimeclockStore:
     def __init__(self, gateway: BaseTableGateway) -> None:
@@ -518,6 +590,8 @@ class TimeclockStore:
         if not spreadsheet_id:
             spreadsheet_id = _parse_sheet_id(os.getenv("CLOUDLOG_SPREADSHEET_URL"))
         if not spreadsheet_id:
+            spreadsheet_id = _parse_sheet_id(DEFAULT_SPREADSHEET_URL)
+        if not spreadsheet_id:
             return cls(MemoryTableGateway())
 
         credentials_path = _resolve_google_credentials_path()
@@ -530,6 +604,7 @@ class TimeclockStore:
             if not settings_rows:
                 self._gw.append_row("Settings", self._settings_to_row(DEFAULT_SETTINGS))
             self._ensure_meta_defaults()
+            self._ensure_runtime_settings_defaults()
             users = self._gw.read_rows("Users")
             if not users:
                 admin_email = (os.getenv("CLOUDLOG_BOOTSTRAP_ADMIN_EMAIL", "admin@example.com") or "admin@example.com").strip().lower()
@@ -613,6 +688,8 @@ class TimeclockStore:
             merged["updated_by_user_id"] = actor_user_id
             merged["updated_at"] = _iso_now()
             self._gw.replace_rows("Settings", [self._settings_to_row(merged)])
+            self._upsert_runtime_setting("closingDay", str(_normalize_user_closing_day(merged.get("payroll_cutoff_day"), 20)))
+            self._upsert_runtime_setting("requiredWorkMinutes", str(max(0, _as_int(merged.get("scheduled_work_minutes"), 480))))
             return self.get_settings()
 
     def _meta_map(self) -> dict[str, str]:
@@ -640,8 +717,91 @@ class TimeclockStore:
         if changed:
             self._gw.replace_rows("_meta", rows)
 
+    def _runtime_settings_map(self) -> dict[str, str]:
+        rows = self._gw.read_rows("settings")
+        out: dict[str, str] = {}
+        for row in rows:
+            key = str(row.get("key") or "").strip()
+            if key:
+                out[key] = str(row.get("value") or "")
+        return out
+
+    def _ensure_runtime_settings_defaults(self) -> None:
+        rows = self._gw.read_rows("settings")
+        existing = {str(r.get("key") or "").strip() for r in rows}
+        now = _iso_now()
+
+        settings = self.get_settings()
+        defaults = dict(DEFAULT_RUNTIME_SETTINGS)
+        defaults["closingDay"] = str(_normalize_user_closing_day(settings.get("payroll_cutoff_day"), 20))
+        defaults["requiredWorkMinutes"] = str(_as_int(settings.get("scheduled_work_minutes"), 480))
+
+        changed = False
+        for key, value in defaults.items():
+            if key in existing:
+                continue
+            rows.append({"key": key, "value": str(value), "updatedAt": now})
+            changed = True
+
+        if changed:
+            self._gw.replace_rows("settings", rows)
+
+    def _upsert_runtime_setting(self, key: str, value: str) -> None:
+        if not key:
+            return
+        rows = self._gw.read_rows("settings")
+        now = _iso_now()
+        updated = False
+        for row in rows:
+            if str(row.get("key") or "").strip() != key:
+                continue
+            row["value"] = str(value)
+            row["updatedAt"] = now
+            updated = True
+            break
+        if not updated:
+            rows.append({"key": key, "value": str(value), "updatedAt": now})
+        self._gw.replace_rows("settings", rows)
+
+    def get_runtime_policy(self) -> dict[str, Any]:
+        defaults = dict(DEFAULT_RUNTIME_SETTINGS)
+        settings = self.get_settings()
+        defaults["closingDay"] = str(_normalize_user_closing_day(settings.get("payroll_cutoff_day"), 20))
+        defaults["requiredWorkMinutes"] = str(_as_int(settings.get("scheduled_work_minutes"), 480))
+
+        kv = self._runtime_settings_map()
+        merged = dict(defaults)
+        merged.update({k: str(v) for k, v in kv.items() if str(k).strip()})
+
+        return {
+            "timezone": str(merged.get("timezone") or "Asia/Tokyo"),
+            "closing_day": _normalize_user_closing_day(merged.get("closingDay"), _normalize_user_closing_day(settings.get("payroll_cutoff_day"), 20)),
+            "required_work_minutes": max(0, _as_int(merged.get("requiredWorkMinutes"), _as_int(settings.get("scheduled_work_minutes"), 480))),
+            "night_start": str(merged.get("nightStart") or "22:00"),
+            "night_end": str(merged.get("nightEnd") or "05:00"),
+            "allow_multiple_clock_in_same_day": _as_bool(merged.get("allowMultipleClockInSameDay", "false")),
+        }
+
+    def update_runtime_policy(self, *, changes: dict[str, Any]) -> dict[str, Any]:
+        with self._lock:
+            current = self.get_runtime_policy()
+            if "closing_day" in changes:
+                self._upsert_runtime_setting("closingDay", str(_normalize_user_closing_day(changes.get("closing_day"), current["closing_day"])))
+            if "required_work_minutes" in changes:
+                self._upsert_runtime_setting("requiredWorkMinutes", str(max(0, _as_int(changes.get("required_work_minutes"), current["required_work_minutes"]))))
+            if "night_start" in changes:
+                self._upsert_runtime_setting("nightStart", str(changes.get("night_start") or current["night_start"]))
+            if "night_end" in changes:
+                self._upsert_runtime_setting("nightEnd", str(changes.get("night_end") or current["night_end"]))
+            if "allow_multiple_clock_in_same_day" in changes:
+                self._upsert_runtime_setting(
+                    "allowMultipleClockInSameDay",
+                    _to_csv_bool(bool(changes.get("allow_multiple_clock_in_same_day"))),
+                )
+            return self.get_runtime_policy()
+
     def _default_user_closing_day(self) -> int:
-        settings_day = _normalize_user_closing_day(self.get_settings().get("payroll_cutoff_day"), 20)
+        settings_day = _normalize_user_closing_day(self.get_runtime_policy().get("closing_day"), 20)
         meta_day = _normalize_user_closing_day(self._meta_map().get("closing_day_default"), settings_day)
         return meta_day
 
@@ -904,6 +1064,29 @@ class TimeclockStore:
             out.append(row)
         return out
 
+    def list_recent_events(self, *, user_id: str, limit: int = 10) -> list[dict[str, Any]]:
+        target = max(1, int(limit))
+        batch = max(80, target * 8)
+        collected: list[dict[str, Any]] = []
+
+        with self._lock:
+            for _ in range(5):
+                tail_rows = [self._parse_event(r) for r in self._gw.read_tail_rows("Events", batch)]
+                items = [row for row in tail_rows if str(row.get("user_id") or "") == str(user_id) and row.get("event_dt")]
+                items.sort(key=lambda ev: ev.get("event_dt") or datetime.min.replace(tzinfo=JST), reverse=True)
+                collected = items[:target]
+                if len(collected) >= target or len(tail_rows) < batch:
+                    break
+                batch *= 2
+
+            if len(collected) < target:
+                all_rows = [self._parse_event(r) for r in self._gw.read_rows("Events")]
+                items = [row for row in all_rows if str(row.get("user_id") or "") == str(user_id) and row.get("event_dt")]
+                items.sort(key=lambda ev: ev.get("event_dt") or datetime.min.replace(tzinfo=JST), reverse=True)
+                collected = items[:target]
+
+        return collected
+
     def get_event_by_id(self, event_id: str) -> dict[str, Any] | None:
         needle = str(event_id or "").strip()
         if not needle:
@@ -959,43 +1142,111 @@ class TimeclockStore:
             "events": events,
         }
 
+    def _attendance_state_from_events(self, events: list[dict[str, Any]]) -> str:
+        timeline = sorted(
+            [ev for ev in events if str(ev.get("event_type") or "") in EVENT_TYPES],
+            key=lambda ev: str(ev.get("event_time") or ""),
+        )
+        state = "NOT_STARTED"
+        for ev in timeline:
+            event_type = str(ev.get("event_type") or "")
+            if event_type == EVENT_IN:
+                state = "WORKING"
+            elif event_type == EVENT_OUTING and state == "WORKING":
+                state = "OUTING"
+            elif event_type == EVENT_RETURN and state == "OUTING":
+                state = "WORKING"
+            elif event_type == EVENT_OUT and state in {"WORKING", "OUTING"}:
+                state = "DONE"
+        return state
+
+    def attendance_state(self, *, user_id: str, target_date: date) -> dict[str, Any]:
+        record = self.get_day_record(user_id=user_id, target_date=target_date)
+        state = self._attendance_state_from_events(record.get("events") or [])
+        policy = self.get_runtime_policy()
+        allow_multi = bool(policy.get("allow_multiple_clock_in_same_day"))
+
+        status = "未出勤"
+        if state in {"WORKING", "OUTING"}:
+            status = "出勤済"
+        elif state == "DONE":
+            status = "退勤済"
+
+        primary_action = "clock-in"
+        primary_label = "出勤"
+        primary_endpoint = "/events/clock-in"
+        primary_disabled = False
+
+        if state in {"WORKING", "OUTING"}:
+            primary_action = "clock-out"
+            primary_label = "退勤"
+            primary_endpoint = "/events/clock-out"
+        elif state == "DONE" and not allow_multi:
+            primary_action = "done"
+            primary_label = "退勤済"
+            primary_endpoint = "/events/clock-out"
+            primary_disabled = True
+
+        secondary_action = "disabled"
+        secondary_label = "外出/戻り"
+        secondary_endpoint = "/events/outing"
+        secondary_disabled = True
+        if state == "WORKING":
+            secondary_action = "outing"
+            secondary_label = "外出"
+            secondary_endpoint = "/events/outing"
+            secondary_disabled = False
+        elif state == "OUTING":
+            secondary_action = "return"
+            secondary_label = "戻り"
+            secondary_endpoint = "/events/return"
+            secondary_disabled = False
+
+        return {
+            "record": record,
+            "event_state": state,
+            "status": status,
+            "is_outing_now": state == "OUTING",
+            "primary_action": primary_action,
+            "primary_label": primary_label,
+            "primary_endpoint": primary_endpoint,
+            "primary_disabled": primary_disabled,
+            "secondary_action": secondary_action,
+            "secondary_label": secondary_label,
+            "secondary_endpoint": secondary_endpoint,
+            "secondary_disabled": secondary_disabled,
+        }
+
     def _can_clock(self, *, user_id: str, today: date, action: str) -> tuple[bool, str]:
-        record = self.get_day_record(user_id=user_id, target_date=today)
-        has_in = bool(record["clock_in_at"])
-        has_out = bool(record["clock_out_at"])
-        travel_events = [
-            ev
-            for ev in sorted(record.get("events", []), key=lambda ev: str(ev.get("event_time") or ""))
-            if str(ev.get("event_type") or "") in {EVENT_OUTING, EVENT_RETURN}
-        ]
-        is_outing_now = bool(travel_events) and str(travel_events[-1].get("event_type") or "") == EVENT_OUTING
+        state = self.attendance_state(user_id=user_id, target_date=today)
+        event_state = str(state.get("event_state") or "NOT_STARTED")
 
         if action == EVENT_IN:
-            if has_in:
+            if event_state in {"WORKING", "OUTING"}:
                 return False, "already_clocked_in"
-            if has_out:
+            if event_state == "DONE" and bool(state.get("primary_disabled")):
                 return False, "already_clocked_out"
             return True, ""
         if action == EVENT_OUT:
-            if not has_in:
+            if event_state == "NOT_STARTED":
                 return False, "clock_in_required"
-            if has_out:
+            if event_state == "DONE":
                 return False, "already_clocked_out"
             return True, ""
         if action == EVENT_OUTING:
-            if not has_in:
+            if event_state == "NOT_STARTED":
                 return False, "clock_in_required"
-            if has_out:
+            if event_state == "DONE":
                 return False, "already_clocked_out"
-            if is_outing_now:
+            if event_state == "OUTING":
                 return False, "already_outing"
             return True, ""
         if action == EVENT_RETURN:
-            if not has_in:
+            if event_state == "NOT_STARTED":
                 return False, "clock_in_required"
-            if has_out:
+            if event_state == "DONE":
                 return False, "already_clocked_out"
-            if not is_outing_now:
+            if event_state != "OUTING":
                 return False, "outing_required"
             return True, ""
         return False, "invalid_action"
@@ -1043,9 +1294,20 @@ class TimeclockStore:
             "created_by": str(edited_by_user_id or user_id),
             "is_deleted": "false",
         }
+        feed_row = {
+            "eventId": row["event_id"],
+            "userId": str(user_id),
+            "eventType": event_type,
+            "timestamp": row["event_time"],
+            "note": str(note or ""),
+            "source": source or "web",
+            "createdAt": _iso_now(),
+            "updatedAt": _iso_now(),
+        }
         with self._lock:
             self._gw.append_row("Events", row)
             self._gw.append_row("events", shadow_row)
+            self._gw.append_row("time_events", feed_row)
         return self._parse_event(row)
 
     def _sync_daily_summary_row(self, *, user_id: str, target_date: date) -> None:
@@ -1178,6 +1440,18 @@ class TimeclockStore:
                 "reason": str(note or ""),
             },
         )
+        self._gw.append_row(
+            "time_edits",
+            {
+                "editId": str(uuid.uuid4()),
+                "eventId": str(original.get("event_id") or ""),
+                "userId": str(actor_user_id or ""),
+                "beforeJson": json.dumps(before, ensure_ascii=False),
+                "afterJson": json.dumps(after, ensure_ascii=False),
+                "reason": str(note or ""),
+                "editedAt": _iso_now(),
+            },
+        )
         event_day = event_dt.astimezone(JST).date()
         self._sync_cached_summaries(user_id=str(original["user_id"]), anchor=event_day)
         return appended
@@ -1308,13 +1582,13 @@ class TimeclockStore:
 
     def get_payroll_period(self, *, anchor: date | None = None) -> tuple[date, date]:
         ref = anchor or _jst_now().date()
-        settings = self.get_settings()
-        return _period_for_anchor(ref, settings["payroll_cutoff_day"])
+        runtime = self.get_runtime_policy()
+        return _period_for_anchor(ref, int(runtime.get("closing_day") or 20))
 
     def get_payroll_period_by_month(self, year_month: str) -> tuple[date, date]:
         base = datetime.strptime(str(year_month) + "-01", "%Y-%m-%d").date()
-        settings = self.get_settings()
-        cutoff = settings["payroll_cutoff_day"]
+        runtime = self.get_runtime_policy()
+        cutoff = int(runtime.get("closing_day") or 20)
         end = date(base.year, base.month, _clamp_day(base.year, base.month, cutoff))
         py, pm = _shift_month(base.year, base.month, -1)
         start = date(py, pm, _clamp_day(py, pm, cutoff + 1))

@@ -1,30 +1,11 @@
 {% extends "base.html" %}
 {% block content %}
-{% set primary_mode = "出勤" %}
-{% set primary_action = "clock-in" %}
-{% set primary_endpoint = "/events/clock-in" %}
-{% if status == "出勤済" %}
-  {% set primary_mode = "退勤" %}
-  {% set primary_action = "clock-out" %}
-  {% set primary_endpoint = "/events/clock-out" %}
-{% elif status == "退勤済" %}
-  {% set primary_mode = "退勤済" %}
-  {% set primary_action = "done" %}
-  {% set primary_endpoint = "/events/clock-out" %}
-{% endif %}
-
-{% set secondary_mode = "外出" %}
-{% set secondary_action = "outing" %}
-{% set secondary_endpoint = "/events/outing" %}
-{% if status != "出勤済" %}
-  {% set secondary_mode = "外出/戻り" %}
-  {% set secondary_action = "disabled" %}
-  {% set secondary_endpoint = "/events/outing" %}
-{% elif is_outing_now %}
-  {% set secondary_mode = "戻り" %}
-  {% set secondary_action = "return" %}
-  {% set secondary_endpoint = "/events/return" %}
-{% endif %}
+{% set primary_mode = primary_label or "出勤" %}
+{% set primary_action = primary_action or "clock-in" %}
+{% set primary_endpoint = primary_endpoint or "/events/clock-in" %}
+{% set secondary_mode = secondary_label or "外出" %}
+{% set secondary_action = secondary_action or "disabled" %}
+{% set secondary_endpoint = secondary_endpoint or "/events/outing" %}
 
 <section class="panel today-shell">
   <div class="today-shell__head">
@@ -51,12 +32,31 @@
         data-clock-action="{{ primary_action }}"
       >
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-        <button class="btn btn--xl btn--primary-clock" id="primary-clock-btn" type="submit" {% if primary_action == 'done' %}disabled{% endif %}>
+        <button class="btn btn--xl btn--primary-clock" id="primary-clock-btn" type="submit" {% if primary_disabled %}disabled{% endif %}>
           {{ primary_mode }}
         </button>
       </form>
 
       <div class="hero-toast-slot" id="clock-toast-region" aria-live="polite" aria-atomic="false"></div>
+
+      <div class="day-progress" id="day-progress" aria-label="本日の進捗バー">
+        <div class="day-progress__track">
+          {% for seg in progress.segments %}
+          <span
+            class="day-progress__segment day-progress__segment--{{ seg.kind }}"
+            style="left: {{ seg.start_pct }}%; width: {{ seg.width_pct }}%;"
+            title="{{ seg.start_label }}〜{{ seg.end_label }} ({{ seg.minutes }}分)"
+          ></span>
+          {% endfor %}
+          <span class="day-progress__marker" id="day-progress-marker" style="left: {{ progress.now_pct }}%;" aria-hidden="true"></span>
+        </div>
+        <div class="day-progress__legend">
+          <span><i class="swatch swatch--work"></i>勤務</span>
+          <span><i class="swatch swatch--break"></i>外出</span>
+          <span><i class="swatch swatch--overtime"></i>残業</span>
+          <span><i class="swatch swatch--night"></i>夜間</span>
+        </div>
+      </div>
     </article>
 
     <aside class="today-side-stack">
@@ -94,7 +94,7 @@
                 class="btn btn--small btn--ghost"
                 id="secondary-action-btn"
                 type="submit"
-                {% if secondary_action == 'disabled' %}disabled{% endif %}
+                {% if secondary_disabled %}disabled{% endif %}
               >
                 {{ secondary_mode }}
               </button>
@@ -396,47 +396,24 @@
       return travel[travel.length - 1].event_type === "OUTING";
     };
 
-    const syncPrimaryAction = (status) => {
+    const syncPrimaryAction = (state) => {
       if (!primaryForm || !primaryButton) return;
-      if (status === "未出勤") {
-        primaryForm.action = "/events/clock-in";
-        primaryForm.dataset.clockAction = "clock-in";
-        primaryButton.disabled = false;
-        primaryButton.textContent = "出勤";
-        return;
-      }
-      if (status === "出勤済") {
-        primaryForm.action = "/events/clock-out";
-        primaryForm.dataset.clockAction = "clock-out";
-        primaryButton.disabled = false;
-        primaryButton.textContent = "退勤";
-        return;
-      }
-      primaryForm.dataset.clockAction = "done";
-      primaryButton.disabled = true;
-      primaryButton.textContent = "退勤済";
+      const endpoint = String(state?.primary_endpoint || "/events/clock-in");
+      const action = String(state?.primary_action || "clock-in");
+      const label = String(state?.primary_label || (action === "clock-out" ? "退勤" : "出勤"));
+      const disabled = Boolean(state?.primary_disabled || action === "done");
+      primaryForm.action = endpoint;
+      primaryForm.dataset.clockAction = action;
+      primaryButton.disabled = disabled;
+      primaryButton.textContent = label;
     };
 
-    const syncSecondaryAction = (status, events) => {
+    const syncSecondaryAction = (state) => {
       if (!secondaryForm || !secondaryButton) return;
-      if (status !== "出勤済") {
-        secondaryForm.action = "/events/outing";
-        secondaryForm.dataset.clockAction = "disabled";
-        secondaryButton.textContent = "外出/戻り";
-        secondaryButton.disabled = true;
-        return;
-      }
-
-      if (isOutingNow(events)) {
-        secondaryForm.action = "/events/return";
-        secondaryForm.dataset.clockAction = "return";
-        secondaryButton.textContent = "戻り";
-      } else {
-        secondaryForm.action = "/events/outing";
-        secondaryForm.dataset.clockAction = "outing";
-        secondaryButton.textContent = "外出";
-      }
-      secondaryButton.disabled = false;
+      secondaryForm.action = String(state?.secondary_endpoint || "/events/outing");
+      secondaryForm.dataset.clockAction = String(state?.secondary_action || "disabled");
+      secondaryButton.textContent = String(state?.secondary_label || "外出/戻り");
+      secondaryButton.disabled = Boolean(state?.secondary_disabled || state?.secondary_action === "disabled");
     };
 
     const renderTimeList = (id, values) => {
@@ -492,6 +469,28 @@
       if (overtime) overtime.textContent = minutesToHHMM(summary?.overtime_minutes || 0);
       if (missing) missing.textContent = `${Number(summary?.missing_count || 0)}日`;
       renderMom(mom || {});
+    };
+
+    const renderProgress = (progress) => {
+      const root = document.getElementById("day-progress");
+      if (!root) return;
+      const track = root.querySelector(".day-progress__track");
+      const marker = document.getElementById("day-progress-marker");
+      if (!track || !marker) return;
+      const segments = Array.isArray(progress?.segments) ? progress.segments : [];
+      track.querySelectorAll(".day-progress__segment").forEach((node) => node.remove());
+      segments.forEach((seg) => {
+        const span = document.createElement("span");
+        span.className = `day-progress__segment day-progress__segment--${String(seg?.kind || "work")}`;
+        span.style.left = `${Number(seg?.start_pct || 0)}%`;
+        span.style.width = `${Number(seg?.width_pct || 0)}%`;
+        const startLabel = String(seg?.start_label || "");
+        const endLabel = String(seg?.end_label || "");
+        const mins = Number(seg?.minutes || 0);
+        span.title = `${startLabel}〜${endLabel} (${mins}分)`;
+        track.appendChild(span);
+      });
+      marker.style.left = `${Number(progress?.now_pct || 0)}%`;
     };
 
     const attachHistoryEditHandlers = () => {
@@ -591,14 +590,15 @@
       if (!payload?.ok) return;
 
       if (statusEl && payload.status) statusEl.textContent = payload.status;
-      syncPrimaryAction(payload.status || "");
-      syncSecondaryAction(payload.status || "", payload?.record?.events || []);
+      syncPrimaryAction(payload);
+      syncSecondaryAction(payload);
 
       const rec = payload.record || {};
       setTimeCell("clock-in-value", "clock-in-sub", rec.clock_in);
       setTimeCell("clock-out-value", "clock-out-sub", rec.clock_out);
       renderOutingReturn(rec.events || []);
       renderSummary(payload.summary || {}, payload.mom || {});
+      renderProgress(payload.progress || {});
       renderRecentEvents(payload.recent_events || []);
     };
 

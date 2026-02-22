@@ -29,6 +29,21 @@
       <input type="number" name="scheduled_work_minutes" min="0" value="{{ settings.scheduled_work_minutes }}" required />
     </label>
 
+    <label>夜間開始
+      <input type="time" name="night_start" value="{{ runtime_policy.night_start }}" required />
+    </label>
+
+    <label>夜間終了
+      <input type="time" name="night_end" value="{{ runtime_policy.night_end }}" required />
+    </label>
+
+    <label>同日複数出勤
+      <select name="allow_multiple_clock_in_same_day">
+        <option value="0" {% if not runtime_policy.allow_multiple_clock_in_same_day %}selected{% endif %}>禁止</option>
+        <option value="1" {% if runtime_policy.allow_multiple_clock_in_same_day %}selected{% endif %}>許可</option>
+      </select>
+    </label>
+
     <label>猶予(分)
       <input type="number" name="grace_minutes" min="0" value="{{ settings.grace_minutes }}" required />
     </label>
