@@ -150,51 +150,67 @@
   <div class="history-panel__head">
     <div>
       <h2>直近の打刻履歴</h2>
-      <p class="muted">最新10件。編集内容は履歴として追記されます。</p>
+      <p class="muted">最新10件。修正は履歴に追記されます。</p>
     </div>
   </div>
-  <div class="history-table-wrap">
-    <table class="table punch-history">
-      <thead>
-        <tr>
-          <th>日時</th>
-          <th>種別</th>
-          <th>備考</th>
-          <th>区分</th>
-          <th>修正</th>
-        </tr>
-      </thead>
-      <tbody id="recent-events-body">
-        {% if recent_events %}
-          {% for ev in recent_events %}
-          <tr
-            data-event-id="{{ ev.event_id }}"
-            data-event-type="{{ ev.event_type }}"
-            data-event-time="{{ ev.event_time_input }}"
-            data-event-note="{{ ev.note }}"
-          >
-            <td data-label="日時">{{ ev.event_time_label }}</td>
-            <td data-label="種別">{{ ev.event_type_label }}</td>
-            <td data-label="備考">{{ ev.note or '—' }}</td>
-            <td data-label="区分">
-              {% if ev.is_edited %}
-              <span class="status status--submitted">修正</span>
-              {% else %}
-              <span class="status">通常</span>
-              {% endif %}
-            </td>
-            <td data-label="修正">
-              <button class="btn btn--small btn--ghost history-edit-btn" type="button">編集</button>
-            </td>
-          </tr>
-          {% endfor %}
-        {% else %}
-          <tr>
-            <td colspan="5" class="muted table-empty">打刻履歴がありません</td>
-          </tr>
+  <div id="recent-events-list" class="history-compact-list">
+    {% if recent_events %}
+      {% set ns = namespace(last_date='') %}
+      {% for ev in recent_events %}
+        {% set event_date = (ev.event_time_input or '')[:10] %}
+        {% if not event_date %}
+          {% set event_date = (ev.event_time_label or '')[:10] %}
         {% endif %}
-      </tbody>
-    </table>
+        {% if event_date != ns.last_date %}
+          {% if not loop.first %}
+          </div>
+        </section>
+          {% endif %}
+        <section class="history-date-group" data-history-date="{{ event_date or '----' }}">
+          <h3 class="history-date-heading">{{ event_date or '----' }}</h3>
+          <div class="history-date-items">
+          {% set ns.last_date = event_date %}
+        {% endif %}
+        {% set event_hm = (ev.event_time_input or '')[11:16] %}
+        {% if not event_hm %}
+          {% set event_hm = (ev.event_time_label or '')[11:16] %}
+        {% endif %}
+        <article
+          class="history-row"
+          data-event-id="{{ ev.event_id }}"
+          data-event-type="{{ ev.event_type }}"
+          data-event-time="{{ ev.event_time_input }}"
+          data-event-note="{{ ev.note }}"
+          data-event-edited-at="{{ ev.edited_at or '' }}"
+        >
+          <div class="history-row__main">
+            <div class="history-row__left">
+              <span class="history-row__time">{{ event_hm or '--:--' }}</span>
+              <span class="history-row__type">{{ ev.event_type_label }}</span>
+            </div>
+            <div class="history-row__right">
+              {% if ev.is_edited or ev.edited_at %}
+              <span class="status status--submitted status--tiny">修正</span>
+              {% else %}
+              <span class="status status--tiny">通常</span>
+              {% endif %}
+              <button class="btn btn--ghost history-edit-btn history-edit-btn--icon" type="button" aria-label="打刻を編集" title="打刻を編集">
+                <span aria-hidden="true">&#9998;</span>
+              </button>
+            </div>
+          </div>
+          {% if ev.note %}
+          <p class="history-row__note" title="{{ ev.note }}">{{ ev.note }}</p>
+          {% endif %}
+        </article>
+        {% if loop.last %}
+          </div>
+        </section>
+        {% endif %}
+      {% endfor %}
+    {% else %}
+    <p class="history-empty muted">打刻履歴がありません</p>
+    {% endif %}
   </div>
 </section>
 
@@ -245,7 +261,7 @@
     const primaryButton = document.getElementById("primary-clock-btn");
     const secondaryForm = document.getElementById("secondary-action-form");
     const secondaryButton = document.getElementById("secondary-action-btn");
-    const recentBody = document.getElementById("recent-events-body");
+    const recentList = document.getElementById("recent-events-list");
 
     const modal = document.getElementById("event-edit-modal");
     const modalBackdrop = document.getElementById("event-edit-backdrop");
@@ -286,6 +302,30 @@
       OUT: "退勤",
       OUTING: "外出",
       RETURN: "戻り",
+    };
+
+    const toSafeDateKey = (value) => {
+      const text = String(value || "");
+      if (text.length >= 10) return text.slice(0, 10);
+      return "----";
+    };
+
+    const pickDateKey = (event) => {
+      const input = String(event?.event_time_input || event?.event_time || "");
+      if (input.length >= 10) return toSafeDateKey(input);
+      const label = String(event?.event_time_label || "");
+      const m = label.match(/^\d{4}-\d{2}-\d{2}/);
+      return m ? m[0] : "----";
+    };
+
+    const pickHHMM = (event) => {
+      const input = String(event?.event_time_input || event?.event_time || "");
+      if (input.length >= 16) return input.slice(11, 16);
+      const parsed = parseTime(event?.event_time || event?.event_time_input);
+      if (parsed) return clockFmt.format(parsed).slice(0, 5);
+      const label = String(event?.event_time_label || "");
+      const m = label.match(/(\d{2}:\d{2})/);
+      return m ? m[1] : "--:--";
     };
 
     const escapeHtml = (text) =>
@@ -457,7 +497,7 @@
     const attachHistoryEditHandlers = () => {
       document.querySelectorAll(".history-edit-btn").forEach((btn) => {
         btn.addEventListener("click", () => {
-          const row = btn.closest("tr[data-event-id]");
+          const row = btn.closest("[data-event-id]");
           if (!row || !editEventId || !editEventTime || !editEventType || !editEventNote) return;
           editEventId.value = row.dataset.eventId || "";
           editEventType.value = row.dataset.eventType || "IN";
@@ -469,37 +509,78 @@
     };
 
     const renderRecentEvents = (rows) => {
-      if (!recentBody) return;
+      if (!recentList) return;
       const list = Array.isArray(rows) ? rows : [];
       if (!list.length) {
-        recentBody.innerHTML = '<tr><td colspan="5" class="muted table-empty">打刻履歴がありません</td></tr>';
+        recentList.innerHTML = '<p class="history-empty muted">打刻履歴がありません</p>';
         return;
       }
-      recentBody.innerHTML = list
-        .map((ev) => {
-          const editedBadge = ev?.is_edited
-            ? '<span class="status status--submitted">修正</span>'
-            : '<span class="status">通常</span>';
-          const eventType = String(ev?.event_type || "").toUpperCase();
-          const eventTypeLabel = ev?.event_type_label || eventTypeLabelMap[eventType] || eventType;
-          const eventTimeLabel = ev?.event_time_label || formatDateTime(ev?.event_time);
-          const note = ev?.note ? escapeHtml(ev.note) : "—";
+
+      const normalized = list.slice().sort((a, b) => {
+        const ta = Date.parse(String(a?.event_time || a?.event_time_input || ""));
+        const tb = Date.parse(String(b?.event_time || b?.event_time_input || ""));
+        if (Number.isNaN(ta) && Number.isNaN(tb)) return 0;
+        if (Number.isNaN(ta)) return 1;
+        if (Number.isNaN(tb)) return -1;
+        return tb - ta;
+      });
+
+      const groups = new Map();
+      normalized.forEach((ev) => {
+        const key = pickDateKey(ev);
+        if (!groups.has(key)) groups.set(key, []);
+        groups.get(key).push(ev);
+      });
+
+      const html = Array.from(groups.entries())
+        .map(([dateKey, events]) => {
+          const items = events
+            .map((ev) => {
+              const eventType = String(ev?.event_type || "").toUpperCase();
+              const eventTypeLabel = ev?.event_type_label || eventTypeLabelMap[eventType] || eventType;
+              const hm = pickHHMM(ev);
+              const note = String(ev?.note || "").trim();
+              const noteLine = note ? `<p class="history-row__note" title="${escapeHtml(note)}">${escapeHtml(note)}</p>` : "";
+              const edited = Boolean(ev?.is_edited || ev?.edited_at || ev?.updated_at || ev?.time_edits);
+              const badge = edited
+                ? '<span class="status status--submitted status--tiny">修正</span>'
+                : '<span class="status status--tiny">通常</span>';
+              return `
+                <article
+                  class="history-row"
+                  data-event-id="${escapeHtml(ev?.event_id || "")}"
+                  data-event-type="${escapeHtml(eventType)}"
+                  data-event-time="${escapeHtml(ev?.event_time_input || "")}"
+                  data-event-note="${escapeHtml(ev?.note || "")}"
+                  data-event-edited-at="${escapeHtml(ev?.edited_at || "")}"
+                >
+                  <div class="history-row__main">
+                    <div class="history-row__left">
+                      <span class="history-row__time">${escapeHtml(hm)}</span>
+                      <span class="history-row__type">${escapeHtml(eventTypeLabel)}</span>
+                    </div>
+                    <div class="history-row__right">
+                      ${badge}
+                      <button class="btn btn--ghost history-edit-btn history-edit-btn--icon" type="button" aria-label="打刻を編集" title="打刻を編集">
+                        <span aria-hidden="true">&#9998;</span>
+                      </button>
+                    </div>
+                  </div>
+                  ${noteLine}
+                </article>
+              `;
+            })
+            .join("");
           return `
-            <tr
-              data-event-id="${escapeHtml(ev?.event_id || "")}"
-              data-event-type="${escapeHtml(eventType)}"
-              data-event-time="${escapeHtml(ev?.event_time_input || "")}"
-              data-event-note="${escapeHtml(ev?.note || "")}"
-            >
-              <td data-label="日時">${escapeHtml(eventTimeLabel)}</td>
-              <td data-label="種別">${escapeHtml(eventTypeLabel)}</td>
-              <td data-label="備考">${note}</td>
-              <td data-label="区分">${editedBadge}</td>
-              <td data-label="修正"><button class="btn btn--small btn--ghost history-edit-btn" type="button">編集</button></td>
-            </tr>
+            <section class="history-date-group" data-history-date="${escapeHtml(dateKey)}">
+              <h3 class="history-date-heading">${escapeHtml(dateKey)}</h3>
+              <div class="history-date-items">${items}</div>
+            </section>
           `;
         })
         .join("");
+
+      recentList.innerHTML = html;
       attachHistoryEditHandlers();
     };
 

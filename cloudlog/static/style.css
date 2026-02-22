@@ -1979,22 +1979,114 @@ body.drawer-open {
   margin-bottom: 0.2rem;
 }
 
-.history-table-wrap {
-  overflow-x: auto;
+.history-panel__head .muted {
+  margin-top: 0.08rem;
+  font-size: 0.76rem;
 }
 
-.punch-history th,
-.punch-history td {
-  vertical-align: middle;
+.history-compact-list {
+  display: grid;
+  gap: 0.56rem;
 }
 
-.punch-history td:last-child,
-.punch-history th:last-child {
-  text-align: right;
+.history-date-group {
+  display: grid;
+  gap: 0.34rem;
+}
+
+.history-date-heading {
+  margin: 0;
+  color: #657b6f;
+  font-size: 0.74rem;
+  font-weight: 760;
+  letter-spacing: 0.04em;
+}
+
+.history-date-items {
+  display: grid;
+  gap: 0.4rem;
+}
+
+.history-row {
+  border-radius: 12px;
+  border: 1px solid rgba(32, 91, 58, 0.14);
+  background: rgba(253, 255, 254, 0.88);
+  padding: 0.42rem 0.54rem;
+}
+
+.history-row__main {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.history-row__left {
+  min-width: 0;
+  display: inline-flex;
+  align-items: baseline;
+  gap: 0.42rem;
+}
+
+.history-row__time {
+  font-family: "JetBrains Mono", "SF Mono", "Menlo", "Consolas", monospace;
+  color: #123b26;
+  font-size: 0.98rem;
+  font-weight: 820;
+  letter-spacing: 0.03em;
+}
+
+.history-row__type {
+  color: #2b5d43;
+  font-size: 0.82rem;
+  font-weight: 730;
+}
+
+.history-row__right {
+  flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.34rem;
+}
+
+.status--tiny {
+  padding: 0.12rem 0.46rem;
+  font-size: 0.65rem;
+  line-height: 1.35;
 }
 
 .history-edit-btn {
-  min-width: 64px;
+  min-width: 32px;
+}
+
+.history-edit-btn--icon {
+  width: 32px;
+  min-height: 32px;
+  border-radius: 9px;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.history-edit-btn--icon span {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.history-row__note {
+  margin: 0.16rem 0 0;
+  color: #60756a;
+  font-size: 0.76rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.history-empty {
+  margin: 0;
+  padding: 0.5rem 0.2rem;
+  color: #70857a;
 }
 
 .modal-backdrop {
@@ -2170,6 +2262,22 @@ body.modal-open {
 
   .event-edit-modal {
     width: calc(100vw - 1.2rem);
+  }
+
+  .history-row {
+    padding: 0.4rem 0.5rem;
+  }
+
+  .history-row__time {
+    font-size: 0.95rem;
+  }
+
+  .history-row__type {
+    font-size: 0.8rem;
+  }
+
+  .history-row__note {
+    font-size: 0.74rem;
   }
 }
 
