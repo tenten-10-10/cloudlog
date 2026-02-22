@@ -65,7 +65,26 @@ def test_health_and_auth_flow() -> None:
 
     today_api = client.get("/attendance/today")
     assert today_api.status_code == 200
-    assert today_api.json()["ok"] is True
+    payload = today_api.json()
+    assert payload["ok"] is True
+    assert "mom" in payload
+    assert "recent_events" in payload
+    assert len(payload["recent_events"]) >= 1
+
+    target_event_id = payload["recent_events"][0]["event_id"]
+    edited = client.post(
+        f"/events/{target_event_id}/edit",
+        data={
+            "csrf_token": csrf,
+            "event_type": "IN",
+            "event_time": "2026-02-22T09:00:00",
+            "note": "修正テスト",
+        },
+        headers={"accept": "application/json"},
+    )
+    assert edited.status_code == 200
+    assert edited.json()["ok"] is True
+    assert edited.json()["event"]["is_edited"] is True
 
     cout = client.post("/events/clock-out", data={"csrf_token": csrf}, follow_redirects=False)
     assert cout.status_code in {200, 303}

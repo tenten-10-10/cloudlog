@@ -665,6 +665,16 @@ class TimeclockStore:
             out.append(row)
         return out
 
+    def get_event_by_id(self, event_id: str) -> dict[str, Any] | None:
+        needle = str(event_id or "").strip()
+        if not needle:
+            return None
+        with self._lock:
+            for row in self._gw.read_rows("Events"):
+                if str(row.get("event_id") or "") == needle:
+                    return self._parse_event(row)
+        return None
+
     def _events_by_day(self, *, user_id: str, start_date: date, end_date: date) -> dict[str, list[dict[str, Any]]]:
         out: dict[str, list[dict[str, Any]]] = {}
         for ev in self.list_events(user_id=user_id, start_date=start_date, end_date=end_date):
@@ -804,6 +814,37 @@ class TimeclockStore:
             is_edited=False,
             edited_from_event_id="",
             edited_by_user_id="",
+        )
+
+    def edit_event(
+        self,
+        *,
+        actor_user_id: str,
+        target_event_id: str,
+        event_type: str,
+        event_dt: datetime,
+        note: str,
+        ip: str,
+        user_agent: str,
+    ) -> dict[str, Any]:
+        normalized_type = str(event_type or "").strip().upper()
+        if normalized_type not in EVENT_TYPES:
+            raise ValueError("invalid_event_type")
+        original = self.get_event_by_id(target_event_id)
+        if original is None:
+            raise ValueError("event_not_found")
+        return self.append_event(
+            user_id=str(original["user_id"]),
+            event_type=normalized_type,
+            event_dt=event_dt,
+            client_dt=event_dt,
+            note=str(note or ""),
+            source="web",
+            ip=str(ip or ""),
+            user_agent=str(user_agent or ""),
+            is_edited=True,
+            edited_from_event_id=str(original["event_id"]),
+            edited_by_user_id=str(actor_user_id or ""),
         )
 
     def edit_day_record(

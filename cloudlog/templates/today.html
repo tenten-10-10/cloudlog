@@ -8,7 +8,7 @@
   {% set primary_action = "clock-out" %}
   {% set primary_endpoint = "/events/clock-out" %}
 {% elif status == "退勤済" %}
-  {% set primary_mode = "完了" %}
+  {% set primary_mode = "退勤済" %}
   {% set primary_action = "done" %}
   {% set primary_endpoint = "/events/clock-out" %}
 {% endif %}
@@ -26,44 +26,41 @@
   {% set secondary_endpoint = "/events/return" %}
 {% endif %}
 
-<section class="panel today-hero">
-  <div class="today-hero__grid">
-    <article class="today-main">
-      <div class="headline-row">
-        <div>
-          <p class="kicker">Today / JST</p>
-          <h1>本日の打刻</h1>
-          <p class="muted">{{ today }}</p>
-        </div>
-        <span class="status-pill" id="today-status">{{ status }}</span>
+<section class="panel today-shell">
+  <div class="today-shell__head">
+    <div>
+      <p class="kicker">Today / JST</p>
+      <h1>本日の打刻</h1>
+      <p class="muted">{{ today }}</p>
+    </div>
+    <span class="status-pill" id="today-status">{{ status }}</span>
+  </div>
+
+  <div class="today-shell__grid">
+    <article class="hero-card">
+      <div class="hero-card__clock">
+        <p class="clock-caption">現在時刻</p>
+        <p class="live-clock live-clock--hero" id="live-clock" aria-live="polite">--:--:--</p>
+        <p class="clock-subtext" id="live-clock-date">----</p>
       </div>
 
-      <div class="clock-face">
-        <div class="clock-hero-row">
-          <div class="clock-main">
-            <p class="clock-caption">現在時刻</p>
-            <p class="live-clock live-clock--hero" id="live-clock" aria-live="polite">--:--:--</p>
-            <p class="clock-subtext" id="live-clock-date">----</p>
-          </div>
+      <form
+        method="post"
+        action="{{ primary_endpoint }}"
+        class="primary-clock-form"
+        id="primary-clock-form"
+        data-clock-action="{{ primary_action }}"
+      >
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <button class="btn btn--xl btn--primary-clock" id="primary-clock-btn" type="submit" {% if primary_action == 'done' %}disabled{% endif %}>
+          {{ primary_mode }}
+        </button>
+      </form>
 
-          <form
-            method="post"
-            action="{{ primary_endpoint }}"
-            class="primary-clock-form"
-            id="primary-clock-form"
-            data-clock-action="{{ primary_action }}"
-          >
-            <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-            <button class="btn btn--xl btn--primary-clock" id="primary-clock-btn" type="submit" {% if primary_action == 'done' %}disabled{% endif %}>
-              {{ '本日の打刻完了' if primary_action == 'done' else primary_mode }}
-            </button>
-          </form>
-        </div>
-      </div>
       <div class="hero-toast-slot" id="clock-toast-region" aria-live="polite" aria-atomic="false"></div>
     </article>
 
-    <div class="today-side">
+    <aside class="today-side-stack">
       <section class="today-times-card" aria-label="今日の打刻時刻">
         <h2>今日の打刻時刻</h2>
         <dl class="today-times-grid">
@@ -80,27 +77,13 @@
         </dl>
       </section>
 
-      <details class="outing-log">
+      <details class="outing-log" id="outing-accordion">
         <summary class="outing-log__summary">
-          <span>外出 / 戻り</span>
+          <span>外出 / 戻り（必要時に確認）</span>
+          <span class="outing-log__meta" id="outing-count">0件</span>
           <span class="accordion-chevron" aria-hidden="true"></span>
         </summary>
         <div class="outing-log__body">
-          <div class="outing-lists">
-            <section>
-              <h3>外出</h3>
-              <ul class="time-list" id="outing-list">
-                <li class="time-list__empty">記録なし</li>
-              </ul>
-            </section>
-            <section>
-              <h3>戻り</h3>
-              <ul class="time-list" id="return-list">
-                <li class="time-list__empty">記録なし</li>
-              </ul>
-            </section>
-          </div>
-
           <div class="secondary-actions secondary-actions--sub">
             <form
               method="post"
@@ -119,9 +102,24 @@
               </button>
             </form>
           </div>
+
+          <div class="outing-lists">
+            <section>
+              <h3>外出</h3>
+              <ul class="time-list" id="outing-list">
+                <li class="time-list__empty">記録なし</li>
+              </ul>
+            </section>
+            <section>
+              <h3>戻り</h3>
+              <ul class="time-list" id="return-list">
+                <li class="time-list__empty">記録なし</li>
+              </ul>
+            </section>
+          </div>
         </div>
       </details>
-    </div>
+    </aside>
   </div>
 </section>
 
@@ -129,21 +127,114 @@
   <div class="kpi-strip" role="list" aria-label="今期サマリー">
     <article class="kpi-item" role="listitem">
       <h2>今期就業</h2>
-      <p>{{ minutes_to_hhmm(summary.work_minutes) }}</p>
+      <p id="kpi-work">{{ minutes_to_hhmm(summary.work_minutes) }}</p>
+      <p class="kpi-mom" id="kpi-work-mom">
+        {% if mom.percent_change is not none %}
+          <span class="{{ 'gain' if mom.percent_change >= 0 else 'loss' }}">前月比 {{ '+' if mom.percent_change > 0 else '' }}{{ mom.percent_change }}%</span>
+        {% else %}
+          <span class="muted">前月比 —</span>
+        {% endif %}
+      </p>
+      <p class="kpi-note">締め日 {{ closing_day }}日</p>
     </article>
     <article class="kpi-item" role="listitem">
       <h2>残業</h2>
-      <p>{{ minutes_to_hhmm(summary.overtime_minutes) }}</p>
+      <p id="kpi-overtime">{{ minutes_to_hhmm(summary.overtime_minutes) }}</p>
     </article>
     <article class="kpi-item" role="listitem">
       <h2>未入力</h2>
-      <p>{{ summary.missing_count }}日</p>
+      <p id="kpi-missing">{{ summary.missing_count }}日</p>
     </article>
   </div>
 </section>
 
+<section class="panel history-panel" aria-label="直近の打刻履歴">
+  <div class="history-panel__head">
+    <div>
+      <h2>直近の打刻履歴</h2>
+      <p class="muted">最新10件。編集内容は履歴として追記されます。</p>
+    </div>
+  </div>
+  <div class="history-table-wrap">
+    <table class="table punch-history">
+      <thead>
+        <tr>
+          <th>日時</th>
+          <th>種別</th>
+          <th>備考</th>
+          <th>区分</th>
+          <th>修正</th>
+        </tr>
+      </thead>
+      <tbody id="recent-events-body">
+        {% if recent_events %}
+          {% for ev in recent_events %}
+          <tr
+            data-event-id="{{ ev.event_id }}"
+            data-event-type="{{ ev.event_type }}"
+            data-event-time="{{ ev.event_time_input }}"
+            data-event-note="{{ ev.note }}"
+          >
+            <td>{{ ev.event_time_label }}</td>
+            <td>{{ ev.event_type_label }}</td>
+            <td>{{ ev.note or '—' }}</td>
+            <td>
+              {% if ev.is_edited %}
+              <span class="status status--submitted">修正</span>
+              {% else %}
+              <span class="status">通常</span>
+              {% endif %}
+            </td>
+            <td>
+              <button class="btn btn--small btn--ghost history-edit-btn" type="button">編集</button>
+            </td>
+          </tr>
+          {% endfor %}
+        {% else %}
+          <tr>
+            <td colspan="5" class="muted">打刻履歴がありません</td>
+          </tr>
+        {% endif %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<div class="modal-backdrop" id="event-edit-backdrop" hidden></div>
+<section class="event-edit-modal" id="event-edit-modal" role="dialog" aria-modal="true" aria-labelledby="event-edit-title" hidden>
+  <header class="event-edit-modal__header">
+    <h3 id="event-edit-title">打刻修正</h3>
+    <button type="button" class="icon-btn" id="event-edit-close" aria-label="閉じる">×</button>
+  </header>
+  <p class="muted">この修正は履歴として保存されます。</p>
+  <form id="event-edit-form" class="form-grid compact">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+    <input type="hidden" name="event_id" id="edit-event-id" />
+    <label>
+      打刻日時（JST）
+      <input type="datetime-local" name="event_time" id="edit-event-time" step="1" required />
+    </label>
+    <label>
+      種別
+      <select name="event_type" id="edit-event-type" required>
+        <option value="IN">出勤</option>
+        <option value="OUT">退勤</option>
+        <option value="OUTING">外出</option>
+        <option value="RETURN">戻り</option>
+      </select>
+    </label>
+    <label class="wide">
+      備考（任意）
+      <textarea name="note" id="edit-event-note" placeholder="修正理由やメモ"></textarea>
+    </label>
+    <div class="row-actions">
+      <button class="btn btn--ghost" type="button" id="event-edit-cancel">キャンセル</button>
+      <button class="btn btn--primary" type="submit" id="event-edit-submit">保存</button>
+    </div>
+  </form>
+</section>
+
 <div id="today-flash" data-message="{{ flash_message or '' }}" data-error="{{ flash_error or '' }}" hidden></div>
-<script id="today-events-json" type="application/json">{{ (record.events or []) | tojson }}</script>
 
 <script>
   (() => {
@@ -156,10 +247,20 @@
     const primaryButton = document.getElementById("primary-clock-btn");
     const secondaryForm = document.getElementById("secondary-action-form");
     const secondaryButton = document.getElementById("secondary-action-btn");
-    const eventsNode = document.getElementById("today-events-json");
-    const forms = document.querySelectorAll("form[data-clock-action]");
+    const recentBody = document.getElementById("recent-events-body");
 
-    if (!clockEl || !dateEl || !toastRegion || !forms.length) return;
+    const modal = document.getElementById("event-edit-modal");
+    const modalBackdrop = document.getElementById("event-edit-backdrop");
+    const editForm = document.getElementById("event-edit-form");
+    const editClose = document.getElementById("event-edit-close");
+    const editCancel = document.getElementById("event-edit-cancel");
+    const editSubmit = document.getElementById("event-edit-submit");
+    const editEventId = document.getElementById("edit-event-id");
+    const editEventTime = document.getElementById("edit-event-time");
+    const editEventType = document.getElementById("edit-event-type");
+    const editEventNote = document.getElementById("edit-event-note");
+
+    if (!clockEl || !dateEl || !toastRegion || !statusEl) return;
 
     const clockFmt = new Intl.DateTimeFormat("ja-JP", {
       timeZone: "Asia/Tokyo",
@@ -182,6 +283,13 @@
       day: "2-digit",
     });
 
+    const eventTypeLabelMap = {
+      IN: "出勤",
+      OUT: "退勤",
+      OUTING: "外出",
+      RETURN: "戻り",
+    };
+
     const escapeHtml = (text) =>
       String(text || "")
         .replaceAll("&", "&amp;")
@@ -189,6 +297,31 @@
         .replaceAll(">", "&gt;")
         .replaceAll('"', "&quot;")
         .replaceAll("'", "&#039;");
+
+    const parseTime = (iso) => {
+      if (!iso) return null;
+      const dt = new Date(iso);
+      if (Number.isNaN(dt.getTime())) return null;
+      return dt;
+    };
+
+    const formatTime = (iso) => {
+      const dt = parseTime(iso);
+      return dt ? clockFmt.format(dt) : "";
+    };
+
+    const formatDateTime = (iso) => {
+      const dt = parseTime(iso);
+      if (!dt) return "";
+      return `${ymdFmt.format(dt).replaceAll("/", "-")} ${clockFmt.format(dt)}`;
+    };
+
+    const minutesToHHMM = (minutes) => {
+      const total = Math.max(0, Number(minutes || 0));
+      const hh = String(Math.floor(total / 60)).padStart(2, "0");
+      const mm = String(total % 60).padStart(2, "0");
+      return `${hh}:${mm}`;
+    };
 
     const showToast = (message, kind = "ok") => {
       if (!message) return;
@@ -206,25 +339,7 @@
       };
 
       toast.querySelector(".toast__close")?.addEventListener("click", remove);
-      window.setTimeout(remove, 3800);
-    };
-
-    const parseTime = (iso) => {
-      if (!iso) return null;
-      const dt = new Date(iso);
-      if (Number.isNaN(dt.getTime())) return null;
-      return dt;
-    };
-
-    const formatTime = (iso) => {
-      const dt = parseTime(iso);
-      return dt ? clockFmt.format(dt) : "";
-    };
-
-    const formatEventStamp = (iso) => {
-      const dt = parseTime(iso);
-      if (!dt) return "";
-      return `${ymdFmt.format(dt).replaceAll("/", "-")} ${clockFmt.format(dt)}`;
+      window.setTimeout(remove, 3400);
     };
 
     const setTimeCell = (valueId, subId, value) => {
@@ -261,7 +376,7 @@
       }
       primaryForm.dataset.clockAction = "done";
       primaryButton.disabled = true;
-      primaryButton.textContent = "本日の打刻完了";
+      primaryButton.textContent = "退勤済";
     };
 
     const syncSecondaryAction = (status, events) => {
@@ -316,6 +431,80 @@
       });
       renderTimeList("outing-list", outing);
       renderTimeList("return-list", returning);
+      const countNode = document.getElementById("outing-count");
+      if (countNode) countNode.textContent = `${outing.length + returning.length}件`;
+    };
+
+    const renderMom = (mom) => {
+      const node = document.getElementById("kpi-work-mom");
+      if (!node) return;
+      const pct = mom && typeof mom.percent_change === "number" ? mom.percent_change : null;
+      if (pct === null) {
+        node.innerHTML = '<span class="muted">前月比 —</span>';
+        return;
+      }
+      const cls = pct >= 0 ? "gain" : "loss";
+      const sign = pct > 0 ? "+" : "";
+      node.innerHTML = `<span class="${cls}">前月比 ${sign}${pct}%</span>`;
+    };
+
+    const renderSummary = (summary, mom) => {
+      const work = document.getElementById("kpi-work");
+      const overtime = document.getElementById("kpi-overtime");
+      const missing = document.getElementById("kpi-missing");
+      if (work) work.textContent = minutesToHHMM(summary?.work_minutes || 0);
+      if (overtime) overtime.textContent = minutesToHHMM(summary?.overtime_minutes || 0);
+      if (missing) missing.textContent = `${Number(summary?.missing_count || 0)}日`;
+      renderMom(mom || {});
+    };
+
+    const attachHistoryEditHandlers = () => {
+      document.querySelectorAll(".history-edit-btn").forEach((btn) => {
+        btn.addEventListener("click", () => {
+          const row = btn.closest("tr[data-event-id]");
+          if (!row || !editEventId || !editEventTime || !editEventType || !editEventNote) return;
+          editEventId.value = row.dataset.eventId || "";
+          editEventType.value = row.dataset.eventType || "IN";
+          editEventTime.value = row.dataset.eventTime || "";
+          editEventNote.value = row.dataset.eventNote || "";
+          openEditModal();
+        });
+      });
+    };
+
+    const renderRecentEvents = (rows) => {
+      if (!recentBody) return;
+      const list = Array.isArray(rows) ? rows : [];
+      if (!list.length) {
+        recentBody.innerHTML = '<tr><td colspan="5" class="muted">打刻履歴がありません</td></tr>';
+        return;
+      }
+      recentBody.innerHTML = list
+        .map((ev) => {
+          const editedBadge = ev?.is_edited
+            ? '<span class="status status--submitted">修正</span>'
+            : '<span class="status">通常</span>';
+          const eventType = String(ev?.event_type || "").toUpperCase();
+          const eventTypeLabel = ev?.event_type_label || eventTypeLabelMap[eventType] || eventType;
+          const eventTimeLabel = ev?.event_time_label || formatDateTime(ev?.event_time);
+          const note = ev?.note ? escapeHtml(ev.note) : "—";
+          return `
+            <tr
+              data-event-id="${escapeHtml(ev?.event_id || "")}"
+              data-event-type="${escapeHtml(eventType)}"
+              data-event-time="${escapeHtml(ev?.event_time_input || "")}"
+              data-event-note="${escapeHtml(ev?.note || "")}"
+            >
+              <td>${escapeHtml(eventTimeLabel)}</td>
+              <td>${escapeHtml(eventTypeLabel)}</td>
+              <td>${note}</td>
+              <td>${editedBadge}</td>
+              <td><button class="btn btn--small btn--ghost history-edit-btn" type="button">編集</button></td>
+            </tr>
+          `;
+        })
+        .join("");
+      attachHistoryEditHandlers();
     };
 
     const patchTodayView = async () => {
@@ -332,6 +521,8 @@
       setTimeCell("clock-in-value", "clock-in-sub", rec.clock_in);
       setTimeCell("clock-out-value", "clock-out-sub", rec.clock_out);
       renderOutingReturn(rec.events || []);
+      renderSummary(payload.summary || {}, payload.mom || {});
+      renderRecentEvents(payload.recent_events || []);
     };
 
     const submitClock = async (form) => {
@@ -362,12 +553,12 @@
           return;
         }
 
-        const stamp = formatEventStamp(payload?.event?.event_time);
+        const stamp = formatDateTime(payload?.event?.event_time);
         const actionLabelMap = {
-          "clock-in": "出勤を記録しました",
-          "clock-out": "退勤を記録しました",
-          outing: "外出を記録しました",
-          return: "戻りを記録しました",
+          "clock-in": "出勤しました",
+          "clock-out": "退勤しました",
+          outing: "外出しました",
+          return: "戻りました",
         };
         const actionLabel = actionLabelMap[actionKind] || "打刻しました";
         showToast(stamp ? `${actionLabel} ${stamp}` : actionLabel, "ok");
@@ -375,17 +566,74 @@
       } catch (_err) {
         showToast("打刻に失敗しました", "error");
       } finally {
-        if (submit && actionKind !== "done" && actionKind !== "disabled") submit.disabled = false;
+        if (submit) submit.disabled = false;
         form.classList.remove("is-submitting");
       }
     };
 
-    forms.forEach((form) => {
+    const openEditModal = () => {
+      if (!modal || !modalBackdrop) return;
+      modal.hidden = false;
+      modalBackdrop.hidden = false;
+      document.body.classList.add("modal-open");
+    };
+
+    const closeEditModal = () => {
+      if (!modal || !modalBackdrop) return;
+      modal.hidden = true;
+      modalBackdrop.hidden = true;
+      document.body.classList.remove("modal-open");
+    };
+
+    const submitEventEdit = async () => {
+      if (!editForm || !editEventId) return;
+      const eventId = editEventId.value;
+      if (!eventId) return;
+      if (!window.confirm("この修正は履歴に残ります。保存しますか？")) return;
+
+      if (editSubmit) editSubmit.disabled = true;
+      try {
+        const res = await fetch(`/events/${encodeURIComponent(eventId)}/edit`, {
+          method: "POST",
+          body: new FormData(editForm),
+          headers: { Accept: "application/json" },
+        });
+        const payload = await res.json().catch(() => ({}));
+        if (!res.ok || !payload?.ok) {
+          const reason = payload?.error ? `: ${payload.error}` : "";
+          showToast(`打刻修正に失敗しました${reason}`, "error");
+          return;
+        }
+        const stamp = formatDateTime(payload?.event?.event_time);
+        showToast(stamp ? `打刻修正を保存しました ${stamp}` : "打刻修正を保存しました", "ok");
+        closeEditModal();
+        await patchTodayView();
+      } catch (_err) {
+        showToast("打刻修正に失敗しました", "error");
+      } finally {
+        if (editSubmit) editSubmit.disabled = false;
+      }
+    };
+
+    document.querySelectorAll("form[data-clock-action]").forEach((form) => {
       form.addEventListener("submit", (event) => {
         event.preventDefault();
         submitClock(form);
       });
     });
+
+    if (editClose) editClose.addEventListener("click", closeEditModal);
+    if (editCancel) editCancel.addEventListener("click", closeEditModal);
+    if (modalBackdrop) modalBackdrop.addEventListener("click", closeEditModal);
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape") closeEditModal();
+    });
+    if (editForm) {
+      editForm.addEventListener("submit", (event) => {
+        event.preventDefault();
+        submitEventEdit();
+      });
+    }
 
     const tick = () => {
       const now = new Date();
@@ -395,21 +643,16 @@
 
     tick();
     window.setInterval(tick, 1000);
-
-    let initialEvents = [];
-    try {
-      initialEvents = JSON.parse(eventsNode?.textContent || "[]");
-    } catch (_err) {
-      initialEvents = [];
-    }
-    renderOutingReturn(initialEvents);
-    syncPrimaryAction(statusEl?.textContent || "");
-    syncSecondaryAction(statusEl?.textContent || "", initialEvents);
+    attachHistoryEditHandlers();
 
     const initialMessage = flashNode?.dataset?.message || "";
     const initialError = flashNode?.dataset?.error || "";
     if (initialMessage) showToast(initialMessage, "ok");
     if (initialError) showToast(initialError, "error");
+
+    patchTodayView().catch(() => {
+      showToast("最新状態の取得に失敗しました", "error");
+    });
   })();
 </script>
 {% endblock %}

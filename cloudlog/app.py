@@ -42,6 +42,12 @@ JST = timezone(timedelta(hours=9))
 SESSION_USER_ID_KEY = "cloudlog_user_id"
 SESSION_USER_EMAIL_KEY = "cloudlog_user_email"
 SESSION_CSRF_KEY = "cloudlog_csrf"
+EVENT_TYPE_LABELS = {
+    EVENT_IN: "出勤",
+    EVENT_OUT: "退勤",
+    EVENT_OUTING: "外出",
+    EVENT_RETURN: "戻り",
+}
 
 
 def _jst_now() -> datetime:
@@ -196,12 +202,73 @@ def _is_currently_outing(events: list[dict[str, Any]] | None) -> bool:
     return str(timeline[-1].get("event_type") or "") == EVENT_OUTING
 
 
+def _event_type_label(event_type: str) -> str:
+    return EVENT_TYPE_LABELS.get(str(event_type or "").upper(), str(event_type or ""))
+
+
+def _recent_events_for_user(user_id: str, *, limit: int = 10) -> list[dict[str, Any]]:
+    rows = store.list_events(user_id=user_id)
+    rows = sorted(rows, key=lambda ev: ev.get("event_dt") or datetime.min.replace(tzinfo=JST), reverse=True)
+    out: list[dict[str, Any]] = []
+    for ev in rows[: max(1, int(limit))]:
+        dt: datetime | None = ev.get("event_dt")
+        if dt is None:
+            continue
+        jst_dt = dt.astimezone(JST)
+        out.append(
+            {
+                "event_id": str(ev.get("event_id") or ""),
+                "event_type": str(ev.get("event_type") or ""),
+                "event_type_label": _event_type_label(str(ev.get("event_type") or "")),
+                "event_time": str(ev.get("event_time") or ""),
+                "event_time_label": jst_dt.strftime("%Y-%m-%d %H:%M:%S"),
+                "event_time_input": jst_dt.strftime("%Y-%m-%dT%H:%M:%S"),
+                "note": str(ev.get("note") or ""),
+                "source": str(ev.get("source") or "web"),
+                "is_edited": bool(ev.get("is_edited")),
+                "edited_at": str(ev.get("edited_at") or ""),
+            }
+        )
+    return out
+
+
+def _work_minutes_mom(user_id: str, *, anchor: date | None = None) -> dict[str, Any]:
+    ref = anchor or _jst_today()
+    current_start, current_end = store.get_payroll_period(anchor=ref)
+    _, current_summary = store.daily_records(user_id=user_id, period_start=current_start, period_end=current_end)
+
+    previous_anchor = current_start - timedelta(days=1)
+    previous_start, previous_end = store.get_payroll_period(anchor=previous_anchor)
+    _, previous_summary = store.daily_records(user_id=user_id, period_start=previous_start, period_end=previous_end)
+
+    this_total = int(current_summary.get("work_minutes") or 0)
+    prev_total = int(previous_summary.get("work_minutes") or 0)
+    pct: int | None = None
+    if prev_total > 0:
+        pct = int(round(((this_total - prev_total) / prev_total) * 100))
+
+    return {
+        "period_start": current_start.isoformat(),
+        "period_end": current_end.isoformat(),
+        "previous_period_start": previous_start.isoformat(),
+        "previous_period_end": previous_end.isoformat(),
+        "this_total_minutes": this_total,
+        "previous_total_minutes": prev_total,
+        "percent_change": pct,
+    }
+
+
 def _parse_datetime_local(raw: str | None) -> datetime | None:
     text = str(raw or "").strip()
     if not text:
         return None
-    dt = datetime.strptime(text, "%Y-%m-%dT%H:%M")
-    return dt.replace(tzinfo=JST)
+    for fmt in ("%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M"):
+        try:
+            dt = datetime.strptime(text, fmt)
+            return dt.replace(tzinfo=JST)
+        except ValueError:
+            continue
+    return None
 
 
 def _parse_date(raw: str | None, default: date) -> date:
@@ -500,6 +567,9 @@ def today_page(request: Request):
     rec = _normalize_day_record_for_ui(store.get_day_record(user_id=user["user_id"], target_date=target))
     month_start, month_end = store.get_payroll_period(anchor=target)
     _, summary = store.daily_records(user_id=user["user_id"], period_start=month_start, period_end=month_end)
+    mom = _work_minutes_mom(user["user_id"], anchor=target)
+    settings = store.get_settings()
+    recent_events = _recent_events_for_user(user["user_id"], limit=10)
 
     status = "未出勤"
     if rec.get("clock_in") and not rec.get("clock_out"):
@@ -518,6 +588,9 @@ def today_page(request: Request):
             "month_start": month_start.isoformat(),
             "month_end": month_end.isoformat(),
             "summary": summary,
+            "closing_day": int(settings.get("payroll_cutoff_day") or 20),
+            "mom": mom,
+            "recent_events": recent_events,
             "is_outing_now": is_outing_now,
             "flash_error": str(request.query_params.get("error") or ""),
             "flash_message": str(request.query_params.get("msg") or ""),
@@ -530,13 +603,26 @@ def attendance_today(request: Request):
     user = _require_user(request)
     target = _jst_today()
     rec = _normalize_day_record_for_ui(store.get_day_record(user_id=user["user_id"], target_date=target))
+    period_start, period_end = store.get_payroll_period(anchor=target)
+    _, summary = store.daily_records(user_id=user["user_id"], period_start=period_start, period_end=period_end)
+    mom = _work_minutes_mom(user["user_id"], anchor=target)
+    recent_events = _recent_events_for_user(user["user_id"], limit=10)
     status = "未出勤"
     if rec.get("clock_in") and not rec.get("clock_out"):
         status = "出勤済"
     elif rec.get("clock_in") and rec.get("clock_out"):
         status = "退勤済"
     is_outing_now = status == "出勤済" and _is_currently_outing(rec.get("events"))
-    return {"ok": True, "date": target.isoformat(), "status": status, "is_outing_now": is_outing_now, "record": rec}
+    return {
+        "ok": True,
+        "date": target.isoformat(),
+        "status": status,
+        "is_outing_now": is_outing_now,
+        "record": rec,
+        "summary": summary,
+        "mom": mom,
+        "recent_events": recent_events,
+    }
 
 
 @app.get("/attendance", response_class=HTMLResponse)
@@ -599,6 +685,58 @@ async def clock_outing(request: Request):
 @app.post("/events/return")
 async def clock_return(request: Request):
     return await _clock_action(request, EVENT_RETURN, "戻りました")
+
+
+@app.post("/events/{event_id}/edit")
+async def edit_event(request: Request, event_id: str):
+    user = _require_user(request)
+    form = await request.form()
+    csrf_token = str(form.get("csrf_token") or "")
+    if not _validate_csrf(request.session, csrf_token):
+        return _error_or_redirect(request, redirect_to="/today", message="CSRF tokenが不正です", code=400)
+
+    target = store.get_event_by_id(event_id)
+    if target is None:
+        return _error_or_redirect(request, redirect_to="/today", message="対象の打刻が見つかりません", code=404)
+
+    is_admin = ROLE_ORDER.get(str(user.get("role") or ""), 0) >= ROLE_ORDER[ROLE_ADMIN]
+    if str(target.get("user_id") or "") != str(user.get("user_id") or "") and not is_admin:
+        return _error_or_redirect(request, redirect_to="/today", message="この打刻は修正できません", code=403)
+
+    event_type = str(form.get("event_type") or "").strip().upper()
+    if event_type not in {EVENT_IN, EVENT_OUT, EVENT_OUTING, EVENT_RETURN}:
+        return _error_or_redirect(request, redirect_to="/today", message="打刻種別が不正です", code=400)
+
+    event_time = _parse_datetime_local(form.get("event_time"))
+    if event_time is None:
+        return _error_or_redirect(request, redirect_to="/today", message="打刻日時が不正です", code=400)
+
+    note = str(form.get("note") or "").strip()
+
+    try:
+        updated = store.edit_event(
+            actor_user_id=str(user.get("user_id") or ""),
+            target_event_id=event_id,
+            event_type=event_type,
+            event_dt=event_time,
+            note=note,
+            ip=request.client.host if request.client else "",
+            user_agent=str(request.headers.get("user-agent") or ""),
+        )
+    except ValueError as exc:
+        code = str(exc)
+        msg_map = {
+            "event_not_found": "対象の打刻が見つかりません",
+            "invalid_event_type": "打刻種別が不正です",
+        }
+        return _error_or_redirect(request, redirect_to="/today", message=msg_map.get(code, "打刻修正に失敗しました"), code=400)
+
+    return _success_or_redirect(
+        request,
+        redirect_to="/today",
+        payload={"event": {k: v for k, v in updated.items() if k != "event_dt"}},
+        flash="打刻修正を保存しました",
+    )
 
 
 @app.get("/records", response_class=HTMLResponse)
