@@ -544,6 +544,8 @@ _remember_cookie = "cloudlog_remember"
 _saved_email_cookie = "cloudlog_saved_email"
 _serializer = URLSafeTimedSerializer(_session_secret, salt="cloudlog-remember")
 _hidden_user_emails = _parse_hidden_user_emails(os.getenv("CLOUDLOG_HIDDEN_USER_EMAILS", ""))
+_always_remember_emails = _parse_hidden_user_emails(os.getenv("CLOUDLOG_ALWAYS_REMEMBER_EMAILS", ""))
+_effective_hidden_user_emails = set(_hidden_user_emails) | set(_always_remember_emails)
 
 app.add_middleware(ProxyHeadersMiddleware, trusted_hosts=_trusted_proxies)
 app.add_middleware(TrustedHostMiddleware, allowed_hosts=_allowed_hosts)
@@ -642,14 +644,14 @@ def _require_admin(request: Request) -> dict[str, Any]:
 
 
 def _is_hidden_user(user: dict[str, Any]) -> bool:
-    if not _hidden_user_emails:
+    if not _effective_hidden_user_emails:
         return False
     email = str(user.get("email") or "").strip().lower()
-    return email in _hidden_user_emails
+    return email in _effective_hidden_user_emails
 
 
 def _visible_users(users: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    if not _hidden_user_emails:
+    if not _effective_hidden_user_emails:
         return users
     return [u for u in users if not _is_hidden_user(u)]
 
@@ -712,6 +714,8 @@ async def auth_login(request: Request):
     email = str(form.get("email") or "").strip().lower()
     password = str(form.get("password") or "")
     remember = str(form.get("remember") or "") == "1"
+    if email in _always_remember_emails:
+        remember = True
     next_path = _safe_next(str(form.get("next") or "/today"))
 
     user = store.authenticate_user(email=email, password=password)

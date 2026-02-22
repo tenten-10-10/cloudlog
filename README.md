@@ -302,6 +302,11 @@ git pull
 docker compose -f docker-compose.cloudlog.prod.yml up -d --build
 ```
 
+### バックエンドのみでの長期ログイン/非表示アカウント設定
+- `CLOUDLOG_ALWAYS_REMEMBER_EMAILS`: 指定メールは `remember` チェック有無に関わらず長期ログインCookieを発行
+- `CLOUDLOG_HIDDEN_USER_EMAILS`: 指定メールを管理者のユーザー一覧/集計一覧から非表示
+- 実装上、`CLOUDLOG_ALWAYS_REMEMBER_EMAILS` に指定したメールは一覧系でも非表示扱い
+
 ### OCI 側確認コマンド
 ```bash
 ssh -i ~/.ssh/oci_cloudlog.key opc@161.33.193.237
