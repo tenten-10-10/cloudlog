@@ -17,24 +17,19 @@
 
         {% if current_user %}
         <nav class="nav nav--desktop" aria-label="メインナビゲーション">
-          <a class="nav__link {% if path == '/today' %}is-active{% endif %}" href="/today">本日</a>
-          <a class="nav__link {% if path.startswith('/records') %}is-active{% endif %}" href="/records">打刻履歴</a>
-          <a class="nav__link {% if path.startswith('/leave') %}is-active{% endif %}" href="/leave">休暇申請</a>
+          <a class="nav__link {% if path == '/today' %}is-active{% endif %}" href="/today" aria-current="{% if path == '/today' %}page{% else %}false{% endif %}">本日</a>
+          <a class="nav__link {% if path.startswith('/records') %}is-active{% endif %}" href="/records" aria-current="{% if path.startswith('/records') %}page{% else %}false{% endif %}">打刻履歴</a>
+          <a class="nav__link {% if path.startswith('/leave') %}is-active{% endif %}" href="/leave" aria-current="{% if path.startswith('/leave') %}page{% else %}false{% endif %}">休暇申請</a>
           {% if current_user.role == ROLE_ADMIN %}
-          <a class="nav__link {% if path.startswith('/admin/summary') %}is-active{% endif %}" href="/admin/summary">集計・承認</a>
-          <a class="nav__link {% if path.startswith('/admin/users') %}is-active{% endif %}" href="/admin/users">ユーザー管理</a>
-          <a class="nav__link {% if path.startswith('/admin/settings') %}is-active{% endif %}" href="/admin/settings">管理設定</a>
+          <a class="nav__link {% if path.startswith('/admin/summary') %}is-active{% endif %}" href="/admin/summary" aria-current="{% if path.startswith('/admin/summary') %}page{% else %}false{% endif %}">集計・承認</a>
+          <a class="nav__link {% if path.startswith('/admin/users') %}is-active{% endif %}" href="/admin/users" aria-current="{% if path.startswith('/admin/users') %}page{% else %}false{% endif %}">ユーザー管理</a>
+          <a class="nav__link {% if path.startswith('/admin/settings') %}is-active{% endif %}" href="/admin/settings" aria-current="{% if path.startswith('/admin/settings') %}page{% else %}false{% endif %}">管理設定</a>
           {% else %}
           <span class="nav__link is-disabled" aria-disabled="true">集計・承認</span>
           <span class="nav__link is-disabled" aria-disabled="true">ユーザー管理</span>
           <span class="nav__link is-disabled" aria-disabled="true">管理設定</span>
           {% endif %}
         </nav>
-        <button class="menu-toggle" id="menu-toggle" type="button" aria-label="メニューを開く" aria-expanded="false" aria-controls="mobile-drawer">
-          <span></span>
-          <span></span>
-          <span></span>
-        </button>
         {% endif %}
 
         <div class="user-tools">
@@ -53,13 +48,13 @@
         <button class="menu-close" id="menu-close" type="button" aria-label="メニューを閉じる">×</button>
       </div>
       <nav class="mobile-nav" aria-label="モバイルナビゲーション">
-        <a class="mobile-nav__link {% if path == '/today' %}is-active{% endif %}" href="/today">本日</a>
-        <a class="mobile-nav__link {% if path.startswith('/records') %}is-active{% endif %}" href="/records">打刻履歴</a>
-        <a class="mobile-nav__link {% if path.startswith('/leave') %}is-active{% endif %}" href="/leave">休暇申請</a>
+        <a class="mobile-nav__link {% if path == '/today' %}is-active{% endif %}" href="/today" aria-current="{% if path == '/today' %}page{% else %}false{% endif %}">本日</a>
+        <a class="mobile-nav__link {% if path.startswith('/records') %}is-active{% endif %}" href="/records" aria-current="{% if path.startswith('/records') %}page{% else %}false{% endif %}">打刻履歴</a>
+        <a class="mobile-nav__link {% if path.startswith('/leave') %}is-active{% endif %}" href="/leave" aria-current="{% if path.startswith('/leave') %}page{% else %}false{% endif %}">休暇申請</a>
         {% if current_user.role == ROLE_ADMIN %}
-        <a class="mobile-nav__link {% if path.startswith('/admin/summary') %}is-active{% endif %}" href="/admin/summary">集計・承認</a>
-        <a class="mobile-nav__link {% if path.startswith('/admin/users') %}is-active{% endif %}" href="/admin/users">ユーザー管理</a>
-        <a class="mobile-nav__link {% if path.startswith('/admin/settings') %}is-active{% endif %}" href="/admin/settings">管理設定</a>
+        <a class="mobile-nav__link {% if path.startswith('/admin/summary') %}is-active{% endif %}" href="/admin/summary" aria-current="{% if path.startswith('/admin/summary') %}page{% else %}false{% endif %}">集計・承認</a>
+        <a class="mobile-nav__link {% if path.startswith('/admin/users') %}is-active{% endif %}" href="/admin/users" aria-current="{% if path.startswith('/admin/users') %}page{% else %}false{% endif %}">ユーザー管理</a>
+        <a class="mobile-nav__link {% if path.startswith('/admin/settings') %}is-active{% endif %}" href="/admin/settings" aria-current="{% if path.startswith('/admin/settings') %}page{% else %}false{% endif %}">管理設定</a>
         {% else %}
         <span class="mobile-nav__link is-disabled" aria-disabled="true">集計・承認</span>
         <span class="mobile-nav__link is-disabled" aria-disabled="true">ユーザー管理</span>
@@ -83,6 +78,36 @@
       {% block content %}{% endblock %}
     </main>
 
+    {% if current_user %}
+    <nav class="mobile-tabbar" aria-label="モバイルナビゲーション">
+      <a
+        class="mobile-tabbar__item {% if path.startswith('/records') %}is-active{% endif %}"
+        href="/records"
+        aria-current="{% if path.startswith('/records') %}page{% else %}false{% endif %}"
+      >
+        打刻履歴
+      </a>
+      <a
+        class="mobile-tabbar__item mobile-tabbar__item--primary {% if path == '/today' %}is-active{% endif %}"
+        href="/today"
+        aria-current="{% if path == '/today' %}page{% else %}false{% endif %}"
+      >
+        打刻
+      </a>
+      <button
+        class="mobile-tabbar__item mobile-tabbar__item--menu"
+        id="mobile-menu-toggle"
+        data-menu-toggle
+        type="button"
+        aria-label="メニューを開く"
+        aria-expanded="false"
+        aria-controls="mobile-drawer"
+      >
+        メニュー
+      </button>
+    </nav>
+    {% endif %}
+
     <footer class="site-footer">
       <div class="shell site-footer__inner">
         <div class="footer-links">
@@ -100,12 +125,12 @@
     </footer>
     <script>
       (() => {
-        const toggle = document.getElementById("menu-toggle");
+        const toggles = Array.from(document.querySelectorAll("[data-menu-toggle]"));
         const drawer = document.getElementById("mobile-drawer");
         const closeBtn = document.getElementById("menu-close");
         const backdrop = document.getElementById("mobile-backdrop");
         const mobileMq = window.matchMedia("(max-width: 767px)");
-        if (!toggle || !drawer || !closeBtn || !backdrop) return;
+        if (!toggles.length || !drawer || !closeBtn || !backdrop) return;
 
         const openMenu = () => {
           if (!mobileMq.matches) return;
@@ -114,7 +139,7 @@
             drawer.classList.add("is-open");
           });
           drawer.setAttribute("aria-hidden", "false");
-          toggle.setAttribute("aria-expanded", "true");
+          toggles.forEach((toggle) => toggle.setAttribute("aria-expanded", "true"));
           backdrop.hidden = false;
           document.body.classList.add("drawer-open");
         };
@@ -122,7 +147,7 @@
         const closeMenu = ({ immediate = false } = {}) => {
           drawer.classList.remove("is-open");
           drawer.setAttribute("aria-hidden", "true");
-          toggle.setAttribute("aria-expanded", "false");
+          toggles.forEach((toggle) => toggle.setAttribute("aria-expanded", "false"));
           backdrop.hidden = true;
           document.body.classList.remove("drawer-open");
           if (immediate || !mobileMq.matches) {
@@ -134,12 +159,14 @@
           }, 180);
         };
 
-        toggle.addEventListener("click", () => {
-          if (drawer.classList.contains("is-open")) {
-            closeMenu();
-          } else {
-            openMenu();
-          }
+        toggles.forEach((toggle) => {
+          toggle.addEventListener("click", () => {
+            if (drawer.classList.contains("is-open")) {
+              closeMenu();
+            } else {
+              openMenu();
+            }
+          });
         });
         closeBtn.addEventListener("click", closeMenu);
         backdrop.addEventListener("click", closeMenu);

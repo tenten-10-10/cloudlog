@@ -234,11 +234,11 @@ def _recent_events_for_user(user_id: str, *, limit: int = 10) -> list[dict[str, 
 
 def _work_minutes_mom(user_id: str, *, anchor: date | None = None) -> dict[str, Any]:
     ref = anchor or _jst_today()
-    current_start, current_end = store.get_payroll_period(anchor=ref)
+    current_start, current_end = store.get_payroll_period_for_user(user_id=user_id, anchor=ref)
     _, current_summary = store.daily_records(user_id=user_id, period_start=current_start, period_end=current_end)
 
     previous_anchor = current_start - timedelta(days=1)
-    previous_start, previous_end = store.get_payroll_period(anchor=previous_anchor)
+    previous_start, previous_end = store.get_payroll_period_for_user(user_id=user_id, anchor=previous_anchor)
     _, previous_summary = store.daily_records(user_id=user_id, period_start=previous_start, period_end=previous_end)
 
     this_total = int(current_summary.get("work_minutes") or 0)
@@ -565,10 +565,10 @@ def today_page(request: Request):
     user = _require_user(request)
     target = _jst_today()
     rec = _normalize_day_record_for_ui(store.get_day_record(user_id=user["user_id"], target_date=target))
-    month_start, month_end = store.get_payroll_period(anchor=target)
+    month_start, month_end = store.get_payroll_period_for_user(user_id=user["user_id"], anchor=target)
     _, summary = store.daily_records(user_id=user["user_id"], period_start=month_start, period_end=month_end)
     mom = _work_minutes_mom(user["user_id"], anchor=target)
-    settings = store.get_settings()
+    closing_day = store.get_user_closing_day(user["user_id"])
     recent_events = _recent_events_for_user(user["user_id"], limit=10)
 
     status = "未出勤"
@@ -588,7 +588,7 @@ def today_page(request: Request):
             "month_start": month_start.isoformat(),
             "month_end": month_end.isoformat(),
             "summary": summary,
-            "closing_day": int(settings.get("payroll_cutoff_day") or 20),
+            "closing_day": closing_day,
             "mom": mom,
             "recent_events": recent_events,
             "is_outing_now": is_outing_now,
@@ -603,7 +603,7 @@ def attendance_today(request: Request):
     user = _require_user(request)
     target = _jst_today()
     rec = _normalize_day_record_for_ui(store.get_day_record(user_id=user["user_id"], target_date=target))
-    period_start, period_end = store.get_payroll_period(anchor=target)
+    period_start, period_end = store.get_payroll_period_for_user(user_id=user["user_id"], anchor=target)
     _, summary = store.daily_records(user_id=user["user_id"], period_start=period_start, period_end=period_end)
     mom = _work_minutes_mom(user["user_id"], anchor=target)
     recent_events = _recent_events_for_user(user["user_id"], limit=10)
@@ -1009,13 +1009,24 @@ async def admin_users_create(request: Request):
     name = str(form.get("name") or "").strip()
     password = str(form.get("password") or "")
     role = str(form.get("role") or "user")
+    try:
+        closing_day = int(str(form.get("closing_day") or "20"))
+    except ValueError:
+        closing_day = 20
     active = str(form.get("is_active") or "1") == "1"
 
     if len(password) < 8:
         return _error_or_redirect(request, redirect_to="/admin/users", message="パスワードは8文字以上で入力してください", code=400)
 
     try:
-        user = store.create_user(email=email, name=name, password=password, role=role, is_active=active)
+        user = store.create_user(
+            email=email,
+            name=name,
+            password=password,
+            role=role,
+            closing_day=closing_day,
+            is_active=active,
+        )
     except ValueError as exc:
         return _error_or_redirect(request, redirect_to="/admin/users", message=str(exc), code=400)
 
@@ -1030,6 +1041,7 @@ async def admin_users_update_api(request: Request, user_id: str):
         user_id=user_id,
         name=payload.get("name"),
         role=payload.get("role"),
+        closing_day=payload.get("closing_day"),
         is_active=payload.get("is_active"),
         password=payload.get("password"),
     )
@@ -1045,6 +1057,10 @@ async def admin_users_update_form(request: Request, user_id: str):
 
     name = str(form.get("name") or "").strip()
     role = str(form.get("role") or "user")
+    try:
+        closing_day = int(str(form.get("closing_day") or "20"))
+    except ValueError:
+        closing_day = 20
     active = str(form.get("is_active") or "1") == "1"
     password = str(form.get("password") or "").strip()
 
@@ -1053,6 +1069,7 @@ async def admin_users_update_form(request: Request, user_id: str):
             user_id=user_id,
             name=name,
             role=role,
+            closing_day=closing_day,
             is_active=active,
             password=password or None,
         )

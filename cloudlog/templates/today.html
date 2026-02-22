@@ -31,7 +31,6 @@
     <div>
       <p class="kicker">Today / JST</p>
       <h1>本日の打刻</h1>
-      <p class="muted">{{ today }}</p>
     </div>
     <span class="status-pill" id="today-status">{{ status }}</span>
   </div>
@@ -79,8 +78,7 @@
 
       <details class="outing-log" id="outing-accordion">
         <summary class="outing-log__summary">
-          <span>外出 / 戻り（必要時に確認）</span>
-          <span class="outing-log__meta" id="outing-count">0件</span>
+          <span>外出 / 戻り</span>
           <span class="accordion-chevron" aria-hidden="true"></span>
         </summary>
         <div class="outing-log__body">
@@ -431,8 +429,6 @@
       });
       renderTimeList("outing-list", outing);
       renderTimeList("return-list", returning);
-      const countNode = document.getElementById("outing-count");
-      if (countNode) countNode.textContent = `${outing.length + returning.length}件`;
     };
 
     const renderMom = (mom) => {

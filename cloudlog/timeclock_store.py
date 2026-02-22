@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from sitewatcher.web.auth import hash_password, verify_password
 
@@ -60,6 +61,7 @@ SHEETS_SCHEMA: dict[str, list[str]] = {
         "email",
         "name",
         "role",
+        "closing_day",
         "is_active",
         "password_hash",
         "created_at",
@@ -130,6 +132,67 @@ SHEETS_SCHEMA: dict[str, list[str]] = {
         "summary_json",
         "created_at",
     ],
+}
+
+OPS_SHEETS_SCHEMA: dict[str, list[str]] = {
+    "_meta": [
+        "key",
+        "value",
+        "updated_at",
+    ],
+    "users": [
+        "user_id",
+        "name",
+        "email",
+        "role",
+        "closing_day",
+        "is_active",
+        "created_at",
+    ],
+    "events": [
+        "event_id",
+        "user_id",
+        "event_type",
+        "event_at",
+        "source",
+        "note",
+        "created_at",
+        "created_by",
+        "is_deleted",
+    ],
+    "edits": [
+        "edit_id",
+        "event_id",
+        "edited_at",
+        "edited_by",
+        "before_json",
+        "after_json",
+        "reason",
+    ],
+    "daily": [
+        "user_id",
+        "date",
+        "clock_in_at",
+        "clock_out_at",
+        "break_minutes",
+        "work_minutes",
+        "overtime_minutes",
+        "incomplete_flag",
+        "updated_at",
+    ],
+    "monthly": [
+        "user_id",
+        "period_start",
+        "period_end",
+        "work_minutes",
+        "overtime_minutes",
+        "updated_at",
+    ],
+}
+
+ALL_SHEETS_SCHEMA: dict[str, list[str]] = {
+    **SHEETS_SCHEMA,
+    **OPS_SHEETS_SCHEMA,
 }
 
 DEFAULT_SETTINGS: dict[str, Any] = {
@@ -264,6 +327,29 @@ def _to_csv_bool(value: bool) -> str:
     return "true" if value else "false"
 
 
+def _parse_sheet_id(value: str | None) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if "/" not in raw:
+        return raw
+    try:
+        parsed = urlparse(raw)
+        parts = [p for p in parsed.path.split("/") if p]
+        if "d" in parts:
+            idx = parts.index("d")
+            if idx + 1 < len(parts):
+                return parts[idx + 1]
+    except Exception:
+        return ""
+    return ""
+
+
+def _normalize_user_closing_day(value: Any, default: int = 20) -> int:
+    day = _as_int(value, default)
+    return min(max(1, day), 28)
+
+
 @dataclass(frozen=True)
 class AuthUser:
     user_id: str
@@ -291,7 +377,7 @@ class BaseTableGateway:
 
 class MemoryTableGateway(BaseTableGateway):
     def __init__(self) -> None:
-        self._rows: dict[str, list[dict[str, str]]] = {tab: [] for tab in SHEETS_SCHEMA}
+        self._rows: dict[str, list[dict[str, str]]] = {tab: [] for tab in ALL_SHEETS_SCHEMA}
 
     def read_rows(self, tab: str) -> list[dict[str, str]]:
         return [dict(row) for row in self._rows[tab]]
@@ -314,20 +400,77 @@ class GoogleSheetsGateway(BaseTableGateway):
 
     def _ensure_tabs(self) -> None:
         sheets = {ws.title: ws for ws in self._book.worksheets()}
-        for tab, headers in SHEETS_SCHEMA.items():
+        for tab, headers in ALL_SHEETS_SCHEMA.items():
             ws = sheets.get(tab)
             if ws is None:
                 ws = self._book.add_worksheet(title=tab, rows=2000, cols=max(8, len(headers)))
-            current_header = ws.row_values(1)
-            if current_header != headers:
-                ws.update("A1", [headers])
+            final_headers = self._ensure_headers(ws, headers)
+            self._apply_validations(ws, tab, final_headers)
+
+    def _ensure_headers(self, ws, expected_headers: list[str]) -> list[str]:
+        current = [str(h).strip() for h in ws.row_values(1) if str(h).strip()]
+        if not current:
+            ws.update("A1", [expected_headers])
+            return list(expected_headers)
+
+        merged = list(current)
+        changed = False
+        for h in expected_headers:
+            if h not in merged:
+                merged.append(h)
+                changed = True
+        if changed:
+            ws.update("A1", [merged])
+        return merged
+
+    def _apply_validations(self, ws, tab: str, headers: list[str]) -> None:
+        rules: dict[str, list[str]] = {}
+        if tab == "events":
+            rules["event_type"] = [EVENT_IN, EVENT_OUT, EVENT_OUTING, EVENT_RETURN]
+        elif tab == "users":
+            rules["role"] = [ROLE_ADMIN, ROLE_USER]
+
+        if not rules:
+            return
+
+        requests: list[dict[str, Any]] = []
+        for col_name, values in rules.items():
+            if col_name not in headers:
+                continue
+            col = headers.index(col_name)
+            requests.append(
+                {
+                    "setDataValidation": {
+                        "range": {
+                            "sheetId": ws.id,
+                            "startRowIndex": 1,
+                            "startColumnIndex": col,
+                            "endColumnIndex": col + 1,
+                        },
+                        "rule": {
+                            "condition": {
+                                "type": "ONE_OF_LIST",
+                                "values": [{"userEnteredValue": value} for value in values],
+                            },
+                            "strict": True,
+                            "showCustomUi": True,
+                        },
+                    }
+                }
+            )
+        if not requests:
+            return
+        try:
+            self._book.batch_update({"requests": requests})
+        except Exception:
+            pass
 
     def _ws(self, tab: str):
         return self._book.worksheet(tab)
 
     def read_rows(self, tab: str) -> list[dict[str, str]]:
         ws = self._ws(tab)
-        headers = SHEETS_SCHEMA[tab]
+        headers = ALL_SHEETS_SCHEMA[tab]
         values = ws.get_all_values()
         if not values:
             ws.update("A1", [headers])
@@ -346,12 +489,12 @@ class GoogleSheetsGateway(BaseTableGateway):
 
     def append_row(self, tab: str, row: dict[str, str]) -> None:
         ws = self._ws(tab)
-        headers = SHEETS_SCHEMA[tab]
+        headers = ALL_SHEETS_SCHEMA[tab]
         ws.append_row([str(row.get(h, "")) for h in headers], value_input_option="USER_ENTERED")
 
     def replace_rows(self, tab: str, rows: list[dict[str, str]]) -> None:
         ws = self._ws(tab)
-        headers = SHEETS_SCHEMA[tab]
+        headers = ALL_SHEETS_SCHEMA[tab]
         payload = [headers] + [[str(r.get(h, "")) for h in headers] for r in rows]
         ws.clear()
         ws.update("A1", payload)
@@ -369,7 +512,11 @@ class TimeclockStore:
         if backend in {"memory", "inmemory"}:
             return cls(MemoryTableGateway())
 
-        spreadsheet_id = (os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID", "") or "").strip()
+        spreadsheet_id = _parse_sheet_id(os.getenv("GOOGLE_SHEETS_SPREADSHEET_ID"))
+        if not spreadsheet_id:
+            spreadsheet_id = _parse_sheet_id(os.getenv("GOOGLE_SHEETS_SPREADSHEET_URL"))
+        if not spreadsheet_id:
+            spreadsheet_id = _parse_sheet_id(os.getenv("CLOUDLOG_SPREADSHEET_URL"))
         if not spreadsheet_id:
             return cls(MemoryTableGateway())
 
@@ -382,6 +529,7 @@ class TimeclockStore:
             settings_rows = self._gw.read_rows("Settings")
             if not settings_rows:
                 self._gw.append_row("Settings", self._settings_to_row(DEFAULT_SETTINGS))
+            self._ensure_meta_defaults()
             users = self._gw.read_rows("Users")
             if not users:
                 admin_email = (os.getenv("CLOUDLOG_BOOTSTRAP_ADMIN_EMAIL", "admin@example.com") or "admin@example.com").strip().lower()
@@ -394,6 +542,8 @@ class TimeclockStore:
                     role=ROLE_ADMIN,
                     is_active=True,
                 )
+            else:
+                self._sync_all_users_shadow()
             self.refresh_holidays_cache(force=False)
 
     def _settings_to_row(self, settings: dict[str, Any]) -> dict[str, str]:
@@ -465,6 +615,76 @@ class TimeclockStore:
             self._gw.replace_rows("Settings", [self._settings_to_row(merged)])
             return self.get_settings()
 
+    def _meta_map(self) -> dict[str, str]:
+        rows = self._gw.read_rows("_meta")
+        out: dict[str, str] = {}
+        for row in rows:
+            key = str(row.get("key") or "").strip()
+            if key:
+                out[key] = str(row.get("value") or "")
+        return out
+
+    def _ensure_meta_defaults(self) -> None:
+        rows = self._gw.read_rows("_meta")
+        existing = {str(r.get("key") or "").strip() for r in rows}
+        now = _iso_now()
+        defaults = {
+            "timezone": "Asia/Tokyo",
+            "closing_day_default": str(_normalize_user_closing_day(DEFAULT_SETTINGS.get("payroll_cutoff_day", 20), 20)),
+        }
+        changed = False
+        for key, value in defaults.items():
+            if key not in existing:
+                rows.append({"key": key, "value": value, "updated_at": now})
+                changed = True
+        if changed:
+            self._gw.replace_rows("_meta", rows)
+
+    def _default_user_closing_day(self) -> int:
+        settings_day = _normalize_user_closing_day(self.get_settings().get("payroll_cutoff_day"), 20)
+        meta_day = _normalize_user_closing_day(self._meta_map().get("closing_day_default"), settings_day)
+        return meta_day
+
+    def get_user_closing_day(self, user_id: str) -> int:
+        user = self.get_user_by_id(user_id)
+        if user is not None:
+            return _normalize_user_closing_day(user.get("closing_day"), self._default_user_closing_day())
+        return self._default_user_closing_day()
+
+    def get_payroll_period_for_user(self, *, user_id: str, anchor: date | None = None) -> tuple[date, date]:
+        ref = anchor or _jst_now().date()
+        cutoff = self.get_user_closing_day(user_id)
+        return _period_for_anchor(ref, cutoff)
+
+    def _sync_user_shadow(self, user: dict[str, Any]) -> None:
+        rows = self._gw.read_rows("users")
+        target_id = str(user.get("user_id") or "")
+        if not target_id:
+            return
+        closing_day = _normalize_user_closing_day(user.get("closing_day"), self._default_user_closing_day())
+        row = {
+            "user_id": target_id,
+            "name": str(user.get("name") or ""),
+            "email": str(user.get("email") or "").strip().lower(),
+            "role": str(user.get("role") or ROLE_USER),
+            "closing_day": str(closing_day),
+            "is_active": _to_csv_bool(bool(user.get("is_active"))),
+            "created_at": str(user.get("created_at") or _iso_now()),
+        }
+        updated = False
+        for idx, existing in enumerate(rows):
+            if str(existing.get("user_id") or "") == target_id:
+                rows[idx] = row
+                updated = True
+                break
+        if not updated:
+            rows.append(row)
+        self._gw.replace_rows("users", rows)
+
+    def _sync_all_users_shadow(self) -> None:
+        for user in self.list_users():
+            self._sync_user_shadow(user)
+
     def _row_to_auth_user(self, row: dict[str, str]) -> AuthUser:
         return AuthUser(
             user_id=str(row["user_id"]),
@@ -487,6 +707,7 @@ class TimeclockStore:
                         "email": au.email,
                         "name": au.name,
                         "role": au.role,
+                        "closing_day": _normalize_user_closing_day(row.get("closing_day"), self._default_user_closing_day()),
                         "is_active": au.is_active,
                         "created_at": str(row.get("created_at") or ""),
                         "updated_at": str(row.get("updated_at") or ""),
@@ -506,6 +727,7 @@ class TimeclockStore:
                         "email": au.email,
                         "name": au.name,
                         "role": au.role,
+                        "closing_day": _normalize_user_closing_day(row.get("closing_day"), self._default_user_closing_day()),
                         "is_active": au.is_active,
                         "password_hash": au.password_hash,
                         "created_at": str(row.get("created_at") or ""),
@@ -525,6 +747,7 @@ class TimeclockStore:
                         "email": au.email,
                         "name": au.name,
                         "role": au.role,
+                        "closing_day": _normalize_user_closing_day(row.get("closing_day"), self._default_user_closing_day()),
                         "is_active": au.is_active,
                         "password_hash": au.password_hash,
                         "created_at": str(row.get("created_at") or ""),
@@ -533,7 +756,16 @@ class TimeclockStore:
                     }
             return None
 
-    def create_user(self, *, email: str, name: str, password: str, role: str = ROLE_USER, is_active: bool = True) -> dict[str, Any]:
+    def create_user(
+        self,
+        *,
+        email: str,
+        name: str,
+        password: str,
+        role: str = ROLE_USER,
+        closing_day: int | None = None,
+        is_active: bool = True,
+    ) -> dict[str, Any]:
         with self._lock:
             lowered = str(email or "").strip().lower()
             if not lowered:
@@ -548,6 +780,7 @@ class TimeclockStore:
                 "email": lowered,
                 "name": str(name or lowered.split("@")[0]),
                 "role": role,
+                "closing_day": str(_normalize_user_closing_day(closing_day, self._default_user_closing_day())),
                 "is_active": _to_csv_bool(is_active),
                 "password_hash": hash_password(password),
                 "created_at": now,
@@ -558,6 +791,7 @@ class TimeclockStore:
             created = self.get_user_by_email(lowered)
             if created is None:
                 raise StorageError("failed_to_create_user")
+            self._sync_user_shadow(created)
             return created
 
     def update_user(
@@ -566,6 +800,7 @@ class TimeclockStore:
         user_id: str,
         name: str | None = None,
         role: str | None = None,
+        closing_day: int | None = None,
         is_active: bool | None = None,
         password: str | None = None,
     ) -> dict[str, Any]:
@@ -585,6 +820,9 @@ class TimeclockStore:
                         raise ValueError("invalid_role")
                     row["role"] = role
                     changed = True
+                if closing_day is not None:
+                    row["closing_day"] = str(_normalize_user_closing_day(closing_day, self._default_user_closing_day()))
+                    changed = True
                 if is_active is not None:
                     row["is_active"] = _to_csv_bool(bool(is_active))
                     changed = True
@@ -601,6 +839,7 @@ class TimeclockStore:
             updated = self.get_user_by_id(user_id)
             if updated is None:
                 raise StorageError("failed_to_update_user")
+            self._sync_user_shadow(updated)
             return updated
 
     def authenticate_user(self, *, email: str, password: str) -> dict[str, Any] | None:
@@ -793,16 +1032,83 @@ class TimeclockStore:
             "edited_by_user_id": str(edited_by_user_id or ""),
             "edited_at": _iso_now() if is_edited else "",
         }
+        shadow_row = {
+            "event_id": row["event_id"],
+            "user_id": str(user_id),
+            "event_type": event_type,
+            "event_at": row["event_time"],
+            "source": source,
+            "note": str(note or ""),
+            "created_at": _iso_now(),
+            "created_by": str(edited_by_user_id or user_id),
+            "is_deleted": "false",
+        }
         with self._lock:
             self._gw.append_row("Events", row)
+            self._gw.append_row("events", shadow_row)
         return self._parse_event(row)
+
+    def _sync_daily_summary_row(self, *, user_id: str, target_date: date) -> None:
+        rows = self._gw.read_rows("daily")
+        target_key = (str(user_id), target_date.isoformat())
+        rec = self.get_day_record(user_id=user_id, target_date=target_date)
+        day_rows, _ = self.daily_records(user_id=user_id, period_start=target_date, period_end=target_date)
+        daily = day_rows[0] if day_rows else {}
+        row = {
+            "user_id": str(user_id),
+            "date": target_date.isoformat(),
+            "clock_in_at": str(rec.get("clock_in_at") or ""),
+            "clock_out_at": str(rec.get("clock_out_at") or ""),
+            "break_minutes": str(daily.get("break_minutes", 0)),
+            "work_minutes": str(daily.get("work_minutes", 0)),
+            "overtime_minutes": str(daily.get("overtime_minutes", 0)),
+            "incomplete_flag": _to_csv_bool(bool(daily.get("incomplete"))),
+            "updated_at": _iso_now(),
+        }
+        updated = False
+        for idx, existing in enumerate(rows):
+            if (str(existing.get("user_id") or ""), str(existing.get("date") or "")) == target_key:
+                rows[idx] = row
+                updated = True
+                break
+        if not updated:
+            rows.append(row)
+        self._gw.replace_rows("daily", rows)
+
+    def _sync_monthly_summary_row(self, *, user_id: str, anchor: date) -> None:
+        rows = self._gw.read_rows("monthly")
+        period_start, period_end = self.get_payroll_period_for_user(user_id=user_id, anchor=anchor)
+        _, summary = self.daily_records(user_id=user_id, period_start=period_start, period_end=period_end)
+        row = {
+            "user_id": str(user_id),
+            "period_start": period_start.isoformat(),
+            "period_end": period_end.isoformat(),
+            "work_minutes": str(summary.get("work_minutes", 0)),
+            "overtime_minutes": str(summary.get("overtime_minutes", 0)),
+            "updated_at": _iso_now(),
+        }
+        updated = False
+        for idx, existing in enumerate(rows):
+            if str(existing.get("user_id") or "") != str(user_id):
+                continue
+            if str(existing.get("period_start") or "") == row["period_start"] and str(existing.get("period_end") or "") == row["period_end"]:
+                rows[idx] = row
+                updated = True
+                break
+        if not updated:
+            rows.append(row)
+        self._gw.replace_rows("monthly", rows)
+
+    def _sync_cached_summaries(self, *, user_id: str, anchor: date) -> None:
+        self._sync_daily_summary_row(user_id=user_id, target_date=anchor)
+        self._sync_monthly_summary_row(user_id=user_id, anchor=anchor)
 
     def clock_action(self, *, user_id: str, action: str, note: str, ip: str, user_agent: str) -> dict[str, Any]:
         now = _jst_now()
         can, code = self._can_clock(user_id=user_id, today=now.date(), action=action)
         if not can:
             raise ValueError(code)
-        return self.append_event(
+        appended = self.append_event(
             user_id=user_id,
             event_type=action,
             event_dt=now,
@@ -815,6 +1121,8 @@ class TimeclockStore:
             edited_from_event_id="",
             edited_by_user_id="",
         )
+        self._sync_cached_summaries(user_id=user_id, anchor=now.date())
+        return appended
 
     def edit_event(
         self,
@@ -833,7 +1141,19 @@ class TimeclockStore:
         original = self.get_event_by_id(target_event_id)
         if original is None:
             raise ValueError("event_not_found")
-        return self.append_event(
+        before = {
+            "event_id": str(original.get("event_id") or ""),
+            "user_id": str(original.get("user_id") or ""),
+            "event_type": str(original.get("event_type") or ""),
+            "event_time": str(original.get("event_time") or ""),
+            "note": str(original.get("note") or ""),
+        }
+        after = {
+            "event_type": normalized_type,
+            "event_time": event_dt.astimezone(JST).isoformat(),
+            "note": str(note or ""),
+        }
+        appended = self.append_event(
             user_id=str(original["user_id"]),
             event_type=normalized_type,
             event_dt=event_dt,
@@ -846,6 +1166,21 @@ class TimeclockStore:
             edited_from_event_id=str(original["event_id"]),
             edited_by_user_id=str(actor_user_id or ""),
         )
+        self._gw.append_row(
+            "edits",
+            {
+                "edit_id": str(uuid.uuid4()),
+                "event_id": str(original.get("event_id") or ""),
+                "edited_at": _iso_now(),
+                "edited_by": str(actor_user_id or ""),
+                "before_json": json.dumps(before, ensure_ascii=False),
+                "after_json": json.dumps(after, ensure_ascii=False),
+                "reason": str(note or ""),
+            },
+        )
+        event_day = event_dt.astimezone(JST).date()
+        self._sync_cached_summaries(user_id=str(original["user_id"]), anchor=event_day)
+        return appended
 
     def edit_day_record(
         self,
@@ -918,6 +1253,7 @@ class TimeclockStore:
                 edited_from_event_id="",
                 edited_by_user_id=actor_user_id,
             )
+        self._sync_cached_summaries(user_id=target_user_id, anchor=target_date)
 
     def create_leave_request(self, *, user_id: str, leave_date: str, leave_type: str, leave_name: str, note: str) -> dict[str, Any]:
         if leave_type not in LEAVE_TYPES:

@@ -245,8 +245,17 @@ Python側は compileall で構文確認済みです。
 - 管理: ユーザー管理、勤務設定、月次サマリー、CSV出力
 
 ### Google Sheets スキーマ（固定）
-同一スプレッドシート内に次のシートを作成します（アプリ起動時に自動生成/補正）。
+同一スプレッドシート内に、起動時に不足シート/不足列を自動生成します（既存データは破壊しません）。
 
+運用系（今回追加）:
+1. `_meta`
+2. `users`
+3. `events`
+4. `edits`
+5. `daily`
+6. `monthly`
+
+アプリ互換（既存機能維持）:
 1. `Users`
 2. `Settings`
 3. `Events`
@@ -254,7 +263,8 @@ Python側は compileall で構文確認済みです。
 5. `Holidays`
 6. `SummaryCache`
 
-列定義は `cloudlog/timeclock_store.py` の `SHEETS_SCHEMA` に固定されています。
+`_meta` には初期値として `timezone=Asia/Tokyo` と `closing_day_default=20` を投入します。  
+列定義は `cloudlog/timeclock_store.py` の `ALL_SHEETS_SCHEMA` で管理しています。
 
 ### Google Sheets 認証設定（OCI / ローカル共通）
 1. Google Cloud で Service Account を作成
@@ -264,7 +274,9 @@ Python側は compileall で構文確認済みです。
 5. アプリへ設定（どちらか）
    - `GOOGLE_APPLICATION_CREDENTIALS=/run/secrets/google_service_account.json`
    - または `GOOGLE_SERVICE_ACCOUNT_JSON_BASE64=<base64(JSON)>`
-6. `GOOGLE_SHEETS_SPREADSHEET_ID=<spreadsheet key>` を設定
+6. スプレッドシートを設定（いずれか）
+   - `GOOGLE_SHEETS_SPREADSHEET_ID=<spreadsheet key>`
+   - または `GOOGLE_SHEETS_SPREADSHEET_URL=<full url>`
 
 ### 休日データ取得方針
 - `holidays` Python ライブラリを利用して日本の祝日を自動取得
@@ -275,7 +287,7 @@ Python側は compileall で構文確認済みです。
 ### ローカル起動（Docker compose本番構成を使った確認）
 ```bash
 cp .env.cloudlog.example .env.cloudlog
-# 必須値を編集: CLOUDLOG_SECRET_KEY / GOOGLE_SHEETS_SPREADSHEET_ID / 認証情報
+# 必須値を編集: CLOUDLOG_SECRET_KEY / (GOOGLE_SHEETS_SPREADSHEET_ID または GOOGLE_SHEETS_SPREADSHEET_URL) / 認証情報
 
 docker compose -f docker-compose.cloudlog.prod.yml up -d --build
 ```

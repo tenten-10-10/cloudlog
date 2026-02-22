@@ -27,6 +27,9 @@
         <option value="admin">admin</option>
       </select>
     </label>
+    <label>締め日（1-28）
+      <input type="number" name="closing_day" min="1" max="28" value="20" required />
+    </label>
     <label>状態
       <select name="is_active">
         <option value="1">有効</option>
@@ -45,6 +48,7 @@
         <th>氏名</th>
         <th>メール</th>
         <th>ロール</th>
+        <th>締め日</th>
         <th>状態</th>
         <th>更新</th>
       </tr>
@@ -55,6 +59,7 @@
         <td>{{ u.name }}</td>
         <td>{{ u.email }}</td>
         <td>{{ u.role }}</td>
+        <td>{{ u.closing_day }}</td>
         <td>{{ '有効' if u.is_active else '無効' }}</td>
         <td>
           <details>
@@ -69,6 +74,9 @@
                   <option value="user" {% if u.role == 'user' %}selected{% endif %}>user</option>
                   <option value="admin" {% if u.role == 'admin' %}selected{% endif %}>admin</option>
                 </select>
+              </label>
+              <label>締め日（1-28）
+                <input type="number" name="closing_day" min="1" max="28" value="{{ u.closing_day }}" required />
               </label>
               <label>状態
                 <select name="is_active">
@@ -86,7 +94,7 @@
       </tr>
       {% else %}
       <tr>
-        <td colspan="5">ユーザーがいません</td>
+        <td colspan="6">ユーザーがいません</td>
       </tr>
       {% endfor %}
     </tbody>
