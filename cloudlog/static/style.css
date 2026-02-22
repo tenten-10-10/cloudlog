@@ -2197,14 +2197,14 @@ body.modal-open {
     left: 50%;
     bottom: 12px;
     transform: translateX(-50%);
-    width: min(94vw, 420px);
-    height: 68px;
+    width: min(96vw, 460px);
+    height: 70px;
     z-index: 76;
     display: grid;
-    grid-template-columns: 1fr 1.15fr 1fr;
-    gap: 0.48rem;
+    grid-template-columns: 0.95fr 0.9fr 1.15fr 0.95fr;
+    gap: 0.42rem;
     align-items: center;
-    padding: 0.52rem;
+    padding: 0.46rem;
     border-radius: 999px;
     border: 1px solid rgba(39, 94, 62, 0.24);
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(238, 249, 243, 0.82));
@@ -2212,19 +2212,25 @@ body.modal-open {
     box-shadow: 0 14px 34px rgba(17, 58, 36, 0.24);
   }
 
+  .mobile-tabbar__action-form {
+    margin: 0;
+    min-width: 0;
+  }
+
   .mobile-tabbar__item {
-    min-height: 50px;
+    width: 100%;
+    min-height: 48px;
     border-radius: 999px;
     border: 1px solid rgba(36, 88, 58, 0.18);
     background: rgba(255, 255, 255, 0.86);
     color: #1f4f37;
-    font-size: 0.78rem;
+    font-size: 0.75rem;
     font-weight: 680;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     text-align: center;
-    padding: 0 0.56rem;
+    padding: 0 0.44rem;
     transition: transform 0.14s ease, box-shadow 0.14s ease, border-color 0.14s ease;
     text-decoration: none;
   }
@@ -2242,7 +2248,7 @@ body.modal-open {
 
   .mobile-tabbar__item--primary {
     min-height: 58px;
-    font-size: 0.92rem;
+    font-size: 0.84rem;
     font-weight: 800;
     border-color: rgba(18, 88, 52, 0.74);
     background: linear-gradient(150deg, #46b875, #1f754a 72%);
@@ -2257,8 +2263,38 @@ body.modal-open {
     border-color: rgba(15, 83, 49, 0.82);
   }
 
+  .mobile-tabbar__item--action.is-active {
+    border-color: rgba(18, 88, 52, 0.74);
+    background: linear-gradient(150deg, #46b875, #1f754a 72%);
+    color: #ffffff;
+    box-shadow: none;
+  }
+
   .mobile-tabbar__item--menu {
     cursor: pointer;
+  }
+
+  .mobile-tabbar-toast {
+    position: fixed;
+    left: 50%;
+    bottom: 90px;
+    transform: translateX(-50%);
+    max-width: calc(100vw - 1.2rem);
+    z-index: 78;
+    padding: 0.44rem 0.74rem;
+    border-radius: 999px;
+    border: 1px solid rgba(26, 86, 54, 0.24);
+    background: rgba(246, 254, 249, 0.96);
+    color: #1b593a;
+    font-size: 0.78rem;
+    font-weight: 640;
+    box-shadow: 0 10px 22px rgba(13, 51, 32, 0.24);
+  }
+
+  .mobile-tabbar-toast.is-error {
+    border-color: rgba(168, 62, 62, 0.28);
+    background: rgba(255, 243, 243, 0.96);
+    color: #8a3333;
   }
 
   .mobile-drawer {
@@ -2280,6 +2316,10 @@ body.modal-open {
 
 @media (min-width: 768px) {
   .mobile-tabbar {
+    display: none !important;
+  }
+
+  .mobile-tabbar-toast {
     display: none !important;
   }
 

@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ title or "SHOWA TIME CARD" }}</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260222c" />
+    <link rel="stylesheet" href="/static/style.css?v=20260222d" />
     <style>
       /* Critical fallback: prevent desktop leakage even when static CSS is stale */
       .mobile-tabbar {
@@ -19,16 +19,16 @@
           left: 50%;
           bottom: 12px;
           transform: translateX(-50%);
-          width: min(94vw, 420px);
-          height: 68px;
+          width: min(96vw, 460px);
+          height: 70px;
           z-index: 76;
           display: grid !important;
           visibility: visible;
           pointer-events: auto;
-          grid-template-columns: 1fr 1.15fr 1fr;
-          gap: 0.48rem;
+          grid-template-columns: 0.95fr 0.9fr 1.15fr 0.95fr;
+          gap: 0.42rem;
           align-items: center;
-          padding: 0.52rem;
+          padding: 0.46rem;
           border-radius: 999px;
           border: 1px solid rgba(39, 94, 62, 0.24);
           background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(238, 249, 243, 0.82));
@@ -36,29 +36,65 @@
           box-shadow: 0 14px 34px rgba(17, 58, 36, 0.24);
         }
 
+        .mobile-tabbar__action-form {
+          margin: 0;
+          min-width: 0;
+        }
+
         .mobile-tabbar__item {
-          min-height: 50px;
+          width: 100%;
+          min-height: 48px;
           border-radius: 999px;
           border: 1px solid rgba(36, 88, 58, 0.18);
           background: rgba(255, 255, 255, 0.86);
           color: #1f4f37;
-          font-size: 0.78rem;
+          font-size: 0.75rem;
           font-weight: 680;
           display: inline-flex;
           align-items: center;
           justify-content: center;
           text-align: center;
-          padding: 0 0.56rem;
+          padding: 0 0.44rem;
           text-decoration: none;
         }
 
         .mobile-tabbar__item--primary {
           min-height: 58px;
-          font-size: 0.92rem;
+          font-size: 0.84rem;
           font-weight: 800;
           border-color: rgba(18, 88, 52, 0.74);
           background: linear-gradient(150deg, #46b875, #1f754a 72%);
           color: #fff;
+        }
+
+        .mobile-tabbar__item--action.is-active {
+          border-color: rgba(18, 88, 52, 0.74);
+          background: linear-gradient(150deg, #46b875, #1f754a 72%);
+          color: #fff;
+          box-shadow: none;
+        }
+
+        .mobile-tabbar-toast {
+          position: fixed;
+          left: 50%;
+          bottom: 90px;
+          transform: translateX(-50%);
+          max-width: calc(100vw - 1.2rem);
+          z-index: 78;
+          padding: 0.44rem 0.74rem;
+          border-radius: 999px;
+          border: 1px solid rgba(26, 86, 54, 0.24);
+          background: rgba(246, 254, 249, 0.96);
+          color: #1b593a;
+          font-size: 0.78rem;
+          font-weight: 640;
+          box-shadow: 0 10px 22px rgba(13, 51, 32, 0.24);
+        }
+
+        .mobile-tabbar-toast.is-error {
+          border-color: rgba(168, 62, 62, 0.28);
+          background: rgba(255, 243, 243, 0.96);
+          color: #8a3333;
         }
       }
     </style>
@@ -145,12 +181,18 @@
         打刻履歴
       </a>
       <a
-        class="mobile-tabbar__item mobile-tabbar__item--primary {% if path == '/today' %}is-active{% endif %}"
+        class="mobile-tabbar__item {% if path == '/today' %}is-active{% endif %}"
         href="/today"
         aria-current="{% if path == '/today' %}page{% else %}false{% endif %}"
       >
-        打刻
+        本日
       </a>
+      <form method="post" action="/events/clock-in" class="mobile-tabbar__action-form" id="mobile-punch-form" data-clock-action="clock-in">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+        <button class="mobile-tabbar__item mobile-tabbar__item--primary mobile-tabbar__item--action" id="mobile-punch-btn" type="submit">
+          出勤
+        </button>
+      </form>
       <button
         class="mobile-tabbar__item mobile-tabbar__item--menu"
         id="mobile-menu-toggle"
@@ -163,6 +205,7 @@
         メニュー
       </button>
     </nav>
+    <div class="mobile-tabbar-toast" id="mobile-tabbar-toast" aria-live="polite" aria-atomic="true" hidden></div>
     {% endif %}
 
     <footer class="site-footer">
@@ -186,8 +229,93 @@
         const drawer = document.getElementById("mobile-drawer");
         const closeBtn = document.getElementById("menu-close");
         const backdrop = document.getElementById("mobile-backdrop");
+        const mobilePunchForm = document.getElementById("mobile-punch-form");
+        const mobilePunchBtn = document.getElementById("mobile-punch-btn");
+        const mobileToast = document.getElementById("mobile-tabbar-toast");
         const mobileMq = window.matchMedia("(max-width: 767px)");
         if (!toggles.length || !drawer || !closeBtn || !backdrop) return;
+
+        const showMobileToast = (message, kind = "ok") => {
+          if (!mobileToast || !message) return;
+          mobileToast.textContent = message;
+          mobileToast.className = `mobile-tabbar-toast ${kind === "error" ? "is-error" : "is-ok"}`;
+          mobileToast.hidden = false;
+          window.clearTimeout(showMobileToast._timer);
+          showMobileToast._timer = window.setTimeout(() => {
+            mobileToast.hidden = true;
+          }, 2400);
+        };
+
+        const setMobilePunchState = (status) => {
+          if (!mobilePunchForm || !mobilePunchBtn) return;
+          if (status === "出勤済") {
+            mobilePunchForm.action = "/events/clock-out";
+            mobilePunchForm.dataset.clockAction = "clock-out";
+            mobilePunchBtn.textContent = "退勤";
+            mobilePunchBtn.disabled = false;
+            return;
+          }
+          if (status === "退勤済") {
+            mobilePunchForm.action = "/events/clock-out";
+            mobilePunchForm.dataset.clockAction = "done";
+            mobilePunchBtn.textContent = "退勤済";
+            mobilePunchBtn.disabled = true;
+            return;
+          }
+          mobilePunchForm.action = "/events/clock-in";
+          mobilePunchForm.dataset.clockAction = "clock-in";
+          mobilePunchBtn.textContent = "出勤";
+          mobilePunchBtn.disabled = false;
+        };
+
+        const refreshMobilePunchState = async () => {
+          if (!mobilePunchForm || !mobilePunchBtn) return;
+          try {
+            const res = await fetch("/attendance/today", { headers: { Accept: "application/json" } });
+            if (!res.ok) return;
+            const payload = await res.json();
+            if (!payload?.ok) return;
+            setMobilePunchState(payload.status || "未出勤");
+          } catch (_err) {
+            // no-op
+          }
+        };
+
+        if (mobilePunchForm && mobilePunchBtn) {
+          mobilePunchForm.addEventListener("submit", async (event) => {
+            event.preventDefault();
+            const action = mobilePunchForm.dataset.clockAction || "";
+            if (action === "done") return;
+            if (mobilePunchBtn.disabled) return;
+            mobilePunchBtn.disabled = true;
+            try {
+              const res = await fetch(mobilePunchForm.action, {
+                method: "POST",
+                body: new FormData(mobilePunchForm),
+                headers: { Accept: "application/json" },
+              });
+              const payload = await res.json().catch(() => ({}));
+              if (!res.ok || !payload?.ok) {
+                const reason = payload?.error ? `: ${payload.error}` : "";
+                showMobileToast(`打刻に失敗しました${reason}`, "error");
+                await refreshMobilePunchState();
+                return;
+              }
+              const actionLabel = action === "clock-out" ? "退勤しました" : "出勤しました";
+              showMobileToast(actionLabel, "ok");
+              await refreshMobilePunchState();
+              window.dispatchEvent(new CustomEvent("cloudlog:punch-updated", { detail: payload }));
+            } catch (_err) {
+              showMobileToast("打刻に失敗しました", "error");
+              await refreshMobilePunchState();
+            } finally {
+              if ((mobilePunchForm.dataset.clockAction || "") !== "done") {
+                mobilePunchBtn.disabled = false;
+              }
+            }
+          });
+          refreshMobilePunchState();
+        }
 
         const openMenu = () => {
           if (!mobileMq.matches) return;

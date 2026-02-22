@@ -649,6 +649,11 @@
     patchTodayView().catch(() => {
       showToast("最新状態の取得に失敗しました", "error");
     });
+    window.addEventListener("cloudlog:punch-updated", () => {
+      patchTodayView().catch(() => {
+        // no-op
+      });
+    });
   })();
 </script>
 {% endblock %}
