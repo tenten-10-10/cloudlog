@@ -2088,13 +2088,18 @@ body.modal-open {
   .hero-card {
     min-height: 100%;
     display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(230px, 290px);
-    align-items: center;
-    gap: 0.92rem;
+    grid-template-columns: 1fr;
+    align-items: start;
+    gap: 0.82rem;
   }
 
   .hero-card__clock {
     align-self: start;
+  }
+
+  .primary-clock-form {
+    width: min(520px, 100%);
+    justify-self: start;
   }
 
   .hero-toast-slot {
