@@ -2186,7 +2186,7 @@ body.modal-open {
 
 @media (max-width: 767px) {
   body {
-    padding-bottom: 96px;
+    padding-bottom: 118px;
   }
 
   main.shell {
@@ -2194,7 +2194,7 @@ body.modal-open {
   }
 
   .site-footer {
-    margin-bottom: 80px;
+    margin-bottom: 96px;
   }
 
   .mobile-tabbar {
@@ -2215,6 +2215,7 @@ body.modal-open {
     background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(238, 249, 243, 0.82));
     backdrop-filter: blur(14px) saturate(155%);
     box-shadow: 0 14px 34px rgba(17, 58, 36, 0.24);
+    transition: transform 0.18s ease, opacity 0.18s ease;
   }
 
   .mobile-tabbar__action-form {
@@ -2294,6 +2295,7 @@ body.modal-open {
     font-size: 0.78rem;
     font-weight: 640;
     box-shadow: 0 10px 22px rgba(13, 51, 32, 0.24);
+    transition: opacity 0.18s ease;
   }
 
   .mobile-tabbar-toast.is-error {
@@ -2316,6 +2318,13 @@ body.modal-open {
 
   .outing-log__body {
     max-height: 220px;
+  }
+
+  body.drawer-open .mobile-tabbar,
+  body.drawer-open .mobile-tabbar-toast {
+    opacity: 0;
+    pointer-events: none;
+    transform: translateX(-50%) translateY(16px);
   }
 }
 
@@ -2368,4 +2377,42 @@ body.modal-open {
 
 .history-panel .muted {
   max-width: 72ch;
+}
+
+/* ---- Mobile table readability fix (label/value rows) ---- */
+@media (max-width: 920px) {
+  table td[data-label],
+  .table td[data-label] {
+    display: grid;
+    grid-template-columns: minmax(74px, 96px) minmax(0, 1fr);
+    gap: 0.54rem;
+    align-items: start;
+    padding: 0.32rem 0;
+  }
+
+  table td[data-label]::before,
+  .table td[data-label]::before {
+    content: attr(data-label);
+    color: #6f8277;
+    font-size: 0.72rem;
+    font-weight: 700;
+    letter-spacing: 0.01em;
+  }
+
+  table td[colspan],
+  .table td[colspan],
+  table td.table-empty,
+  .table td.table-empty {
+    display: block;
+    padding: 0.3rem 0;
+    text-align: left;
+    color: #6f8277;
+  }
+
+  table td[colspan]::before,
+  .table td[colspan]::before,
+  table td.table-empty::before,
+  .table td.table-empty::before {
+    content: none;
+  }
 }

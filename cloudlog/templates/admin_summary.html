@@ -52,22 +52,22 @@
     <tbody>
       {% for item in summaries %}
       <tr>
-        <td>{{ item.user.name }}</td>
-        <td>{{ item.summary.work_days }}日 / {{ minutes_to_hhmm(item.summary.work_minutes) }}</td>
-        <td>{{ item.summary.overtime_days }}日 / {{ minutes_to_hhmm(item.summary.overtime_minutes) }}</td>
-        <td>{{ item.summary.holiday_work_days }}日 / {{ minutes_to_hhmm(item.summary.holiday_work_minutes) }}</td>
-        <td>{{ item.summary.lateness_count }}</td>
-        <td>{{ item.summary.early_leave_count }}</td>
-        <td>{{ item.summary.absence_count }}</td>
-        <td>{{ item.summary.special_leave_count }}</td>
-        <td>{{ item.summary.paid_leave_count }}</td>
-        <td>{{ item.summary.company_designated_paid_leave_count }}</td>
-        <td>{{ item.summary.other_count }}</td>
-        <td>{{ item.summary.missing_count }}</td>
+        <td data-label="氏名">{{ item.user.name }}</td>
+        <td data-label="就業">{{ item.summary.work_days }}日 / {{ minutes_to_hhmm(item.summary.work_minutes) }}</td>
+        <td data-label="残業">{{ item.summary.overtime_days }}日 / {{ minutes_to_hhmm(item.summary.overtime_minutes) }}</td>
+        <td data-label="休出">{{ item.summary.holiday_work_days }}日 / {{ minutes_to_hhmm(item.summary.holiday_work_minutes) }}</td>
+        <td data-label="遅刻">{{ item.summary.lateness_count }}</td>
+        <td data-label="早退">{{ item.summary.early_leave_count }}</td>
+        <td data-label="欠勤">{{ item.summary.absence_count }}</td>
+        <td data-label="特別">{{ item.summary.special_leave_count }}</td>
+        <td data-label="有休">{{ item.summary.paid_leave_count }}</td>
+        <td data-label="会社指定有給">{{ item.summary.company_designated_paid_leave_count }}</td>
+        <td data-label="その他">{{ item.summary.other_count }}</td>
+        <td data-label="未入力">{{ item.summary.missing_count }}</td>
       </tr>
       {% else %}
       <tr>
-        <td colspan="12">データがありません</td>
+        <td class="table-empty" colspan="12">データがありません</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -90,12 +90,12 @@
     <tbody>
       {% for row in leave_requests %}
       <tr>
-        <td>{{ row.leave_date }}</td>
-        <td>{{ row.user_id }}</td>
-        <td>{{ row.leave_type }}</td>
-        <td>{{ row.leave_name }}</td>
-        <td>{{ row.status }}</td>
-        <td>
+        <td data-label="日付">{{ row.leave_date }}</td>
+        <td data-label="ユーザー">{{ row.user_id }}</td>
+        <td data-label="種別">{{ row.leave_type }}</td>
+        <td data-label="名称">{{ row.leave_name }}</td>
+        <td data-label="状態">{{ row.status }}</td>
+        <td data-label="操作">
           {% if row.status == 'PENDING' %}
           <div class="row-actions">
             <form method="post" action="/leave-requests/{{ row.leave_id }}/approve">
@@ -114,7 +114,7 @@
       </tr>
       {% else %}
       <tr>
-        <td colspan="6">休暇申請はありません</td>
+        <td class="table-empty" colspan="6">休暇申請はありません</td>
       </tr>
       {% endfor %}
     </tbody>
@@ -135,14 +135,14 @@
     <tbody>
       {% for a in anomalies %}
       <tr>
-        <td>{{ a.user.name }}</td>
-        <td>{{ a.missing_count }}</td>
-        <td>{{ a.overtime_hhmm }}</td>
-        <td>{{ a.lateness_count }}</td>
+        <td data-label="ユーザー">{{ a.user.name }}</td>
+        <td data-label="未入力">{{ a.missing_count }}</td>
+        <td data-label="残業">{{ a.overtime_hhmm }}</td>
+        <td data-label="遅刻">{{ a.lateness_count }}</td>
       </tr>
       {% else %}
       <tr>
-        <td colspan="4">異常値はありません</td>
+        <td class="table-empty" colspan="4">異常値はありません</td>
       </tr>
       {% endfor %}
     </tbody>

@@ -53,15 +53,15 @@
     <tbody>
       {% for row in requests %}
       <tr>
-        <td>{{ row.leave_date }}</td>
-        <td>{{ row.leave_type }}</td>
-        <td>{{ row.leave_name }}</td>
-        <td>{{ row.note or '-' }}</td>
-        <td>{{ row.status }}</td>
+        <td data-label="日付">{{ row.leave_date }}</td>
+        <td data-label="区分">{{ row.leave_type }}</td>
+        <td data-label="名称">{{ row.leave_name }}</td>
+        <td data-label="メモ">{{ row.note or '-' }}</td>
+        <td data-label="状態">{{ row.status }}</td>
       </tr>
       {% else %}
       <tr>
-        <td colspan="5">申請履歴がありません</td>
+        <td class="table-empty" colspan="5">申請履歴がありません</td>
       </tr>
       {% endfor %}
     </tbody>

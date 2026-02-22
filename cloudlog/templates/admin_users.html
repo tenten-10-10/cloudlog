@@ -56,12 +56,12 @@
     <tbody>
       {% for u in users %}
       <tr>
-        <td>{{ u.name }}</td>
-        <td>{{ u.email }}</td>
-        <td>{{ u.role }}</td>
-        <td>{{ u.closing_day }}</td>
-        <td>{{ '有効' if u.is_active else '無効' }}</td>
-        <td>
+        <td data-label="氏名">{{ u.name }}</td>
+        <td data-label="メール">{{ u.email }}</td>
+        <td data-label="ロール">{{ u.role }}</td>
+        <td data-label="締め日">{{ u.closing_day }}</td>
+        <td data-label="状態">{{ '有効' if u.is_active else '無効' }}</td>
+        <td data-label="更新">
           <details>
             <summary>編集</summary>
             <form method="post" action="/admin/users/{{ u.user_id }}" class="edit-grid">
@@ -94,7 +94,7 @@
       </tr>
       {% else %}
       <tr>
-        <td colspan="6">ユーザーがいません</td>
+        <td class="table-empty" colspan="6">ユーザーがいません</td>
       </tr>
       {% endfor %}
     </tbody>

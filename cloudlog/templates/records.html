@@ -42,14 +42,14 @@
     <tbody>
       {% for row in rows %}
       <tr class="row-{{ row.classification }} {% for f in row.flags %}flag-{{ f }} {% endfor %}">
-        <td>{{ row.date }} ({{ row.weekday }})</td>
-        <td>{{ row.clock_in or '-' }}</td>
-        <td>{{ row.clock_out or '-' }}</td>
-        <td>{{ row.outing or '-' }}</td>
-        <td>{{ row.return or '-' }}</td>
-        <td>{{ row.worked_hhmm }}</td>
-        <td>{{ row.note or '-' }}</td>
-        <td>
+        <td data-label="日付">{{ row.date }} ({{ row.weekday }})</td>
+        <td data-label="出勤">{{ row.clock_in or '-' }}</td>
+        <td data-label="退勤">{{ row.clock_out or '-' }}</td>
+        <td data-label="外出">{{ row.outing or '-' }}</td>
+        <td data-label="戻り">{{ row.return or '-' }}</td>
+        <td data-label="就業">{{ row.worked_hhmm }}</td>
+        <td data-label="備考">{{ row.note or '-' }}</td>
+        <td data-label="修正">
           <details>
             <summary>編集</summary>
             <form method="post" action="/records/{{ row.date }}" class="edit-grid">
@@ -76,7 +76,7 @@
       </tr>
       {% else %}
       <tr>
-        <td colspan="8">データがありません</td>
+        <td class="table-empty" colspan="8">データがありません</td>
       </tr>
       {% endfor %}
     </tbody>

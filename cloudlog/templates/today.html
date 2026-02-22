@@ -173,24 +173,24 @@
             data-event-time="{{ ev.event_time_input }}"
             data-event-note="{{ ev.note }}"
           >
-            <td>{{ ev.event_time_label }}</td>
-            <td>{{ ev.event_type_label }}</td>
-            <td>{{ ev.note or '—' }}</td>
-            <td>
+            <td data-label="日時">{{ ev.event_time_label }}</td>
+            <td data-label="種別">{{ ev.event_type_label }}</td>
+            <td data-label="備考">{{ ev.note or '—' }}</td>
+            <td data-label="区分">
               {% if ev.is_edited %}
               <span class="status status--submitted">修正</span>
               {% else %}
               <span class="status">通常</span>
               {% endif %}
             </td>
-            <td>
+            <td data-label="修正">
               <button class="btn btn--small btn--ghost history-edit-btn" type="button">編集</button>
             </td>
           </tr>
           {% endfor %}
         {% else %}
           <tr>
-            <td colspan="5" class="muted">打刻履歴がありません</td>
+            <td colspan="5" class="muted table-empty">打刻履歴がありません</td>
           </tr>
         {% endif %}
       </tbody>
@@ -472,7 +472,7 @@
       if (!recentBody) return;
       const list = Array.isArray(rows) ? rows : [];
       if (!list.length) {
-        recentBody.innerHTML = '<tr><td colspan="5" class="muted">打刻履歴がありません</td></tr>';
+        recentBody.innerHTML = '<tr><td colspan="5" class="muted table-empty">打刻履歴がありません</td></tr>';
         return;
       }
       recentBody.innerHTML = list
@@ -491,11 +491,11 @@
               data-event-time="${escapeHtml(ev?.event_time_input || "")}"
               data-event-note="${escapeHtml(ev?.note || "")}"
             >
-              <td>${escapeHtml(eventTimeLabel)}</td>
-              <td>${escapeHtml(eventTypeLabel)}</td>
-              <td>${note}</td>
-              <td>${editedBadge}</td>
-              <td><button class="btn btn--small btn--ghost history-edit-btn" type="button">編集</button></td>
+              <td data-label="日時">${escapeHtml(eventTimeLabel)}</td>
+              <td data-label="種別">${escapeHtml(eventTypeLabel)}</td>
+              <td data-label="備考">${note}</td>
+              <td data-label="区分">${editedBadge}</td>
+              <td data-label="修正"><button class="btn btn--small btn--ghost history-edit-btn" type="button">編集</button></td>
             </tr>
           `;
         })
