@@ -4,7 +4,64 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ title or "SHOWA TIME CARD" }}</title>
-    <link rel="stylesheet" href="/static/style.css" />
+    <link rel="stylesheet" href="/static/style.css?v=20260222c" />
+    <style>
+      /* Critical fallback: prevent desktop leakage even when static CSS is stale */
+      .mobile-tabbar {
+        display: none !important;
+        visibility: hidden;
+        pointer-events: none;
+      }
+
+      @media (max-width: 767px) {
+        .mobile-tabbar {
+          position: fixed;
+          left: 50%;
+          bottom: 12px;
+          transform: translateX(-50%);
+          width: min(94vw, 420px);
+          height: 68px;
+          z-index: 76;
+          display: grid !important;
+          visibility: visible;
+          pointer-events: auto;
+          grid-template-columns: 1fr 1.15fr 1fr;
+          gap: 0.48rem;
+          align-items: center;
+          padding: 0.52rem;
+          border-radius: 999px;
+          border: 1px solid rgba(39, 94, 62, 0.24);
+          background: linear-gradient(180deg, rgba(255, 255, 255, 0.84), rgba(238, 249, 243, 0.82));
+          backdrop-filter: blur(14px) saturate(155%);
+          box-shadow: 0 14px 34px rgba(17, 58, 36, 0.24);
+        }
+
+        .mobile-tabbar__item {
+          min-height: 50px;
+          border-radius: 999px;
+          border: 1px solid rgba(36, 88, 58, 0.18);
+          background: rgba(255, 255, 255, 0.86);
+          color: #1f4f37;
+          font-size: 0.78rem;
+          font-weight: 680;
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          text-align: center;
+          padding: 0 0.56rem;
+          text-decoration: none;
+        }
+
+        .mobile-tabbar__item--primary {
+          min-height: 58px;
+          font-size: 0.92rem;
+          font-weight: 800;
+          border-color: rgba(18, 88, 52, 0.74);
+          background: linear-gradient(150deg, #46b875, #1f754a 72%);
+          color: #fff;
+        }
+      }
+    </style>
   </head>
   <body>
     <header class="topbar">
