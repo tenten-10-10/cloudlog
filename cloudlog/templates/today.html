@@ -600,6 +600,10 @@
       renderSummary(payload.summary || {}, payload.mom || {});
       renderProgress(payload.progress || {});
       renderRecentEvents(payload.recent_events || []);
+      if (window.cloudlogPunch?.applyState) {
+        window.cloudlogPunch.applyState(payload);
+      }
+      window.dispatchEvent(new CustomEvent("cloudlog:punch-state", { detail: payload }));
     };
 
     const submitClock = async (form) => {

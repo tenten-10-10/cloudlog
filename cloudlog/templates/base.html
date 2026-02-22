@@ -4,7 +4,7 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ title or "SHOWA TIME CARD" }}</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260222e" />
+    <link rel="stylesheet" href="/static/style.css?v=20260222f" />
     <style>
       /* Critical fallback: prevent mobile-only UI leakage on desktop */
       .mobile-tabbar {
@@ -38,6 +38,13 @@
     <header class="topbar">
       <div class="shell topbar__inner">
         {% set path = request.url.path %}
+        {% if path.startswith('/records') %}
+        {% set mobile_tab_active = 'records' %}
+        {% elif path == '/today' %}
+        {% set mobile_tab_active = 'today' %}
+        {% else %}
+        {% set mobile_tab_active = 'menu' %}
+        {% endif %}
         <a class="brand" href="/today">
           <span class="brand__dot" aria-hidden="true"></span>
           <span>SHOWA TIME CARD</span>
@@ -109,18 +116,30 @@
     {% if current_user %}
     <nav class="mobile-tabbar" aria-label="モバイルナビゲーション">
       <a
-        class="mobile-tabbar__item {% if path.startswith('/records') %}is-active{% endif %}"
+        class="mobile-tabbar__item mobile-tabbar__item--tab {% if mobile_tab_active == 'records' %}is-active{% endif %}"
         href="/records"
-        aria-current="{% if path.startswith('/records') %}page{% else %}false{% endif %}"
+        aria-current="{% if mobile_tab_active == 'records' %}page{% else %}false{% endif %}"
       >
-        打刻履歴
+        <span class="mobile-tabbar__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+            <path d="M6 3h2v2h8V3h2v2h2a1 1 0 0 1 1 1v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1h2V3zm13 8H5v8h14v-8zM7 13h4v4H7v-4z" />
+          </svg>
+        </span>
+        <span class="mobile-tabbar__label">打刻履歴</span>
+        <span class="mobile-tabbar__dot" aria-hidden="true"></span>
       </a>
       <a
-        class="mobile-tabbar__item {% if path == '/today' %}is-active{% endif %}"
+        class="mobile-tabbar__item mobile-tabbar__item--tab {% if mobile_tab_active == 'today' %}is-active{% endif %}"
         href="/today"
-        aria-current="{% if path == '/today' %}page{% else %}false{% endif %}"
+        aria-current="{% if mobile_tab_active == 'today' %}page{% else %}false{% endif %}"
       >
-        本日
+        <span class="mobile-tabbar__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+            <path d="M12 3 2.5 10.2l1.2 1.6L5 10.9V20h5.8v-5.3h2.4V20H19v-9.1l1.3.9 1.2-1.6L12 3z" />
+          </svg>
+        </span>
+        <span class="mobile-tabbar__label">本日</span>
+        <span class="mobile-tabbar__dot" aria-hidden="true"></span>
       </a>
       <form method="post" action="/events/clock-in" class="mobile-tabbar__action-form" id="mobile-punch-form" data-clock-action="clock-in">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
@@ -129,15 +148,22 @@
         </button>
       </form>
       <button
-        class="mobile-tabbar__item mobile-tabbar__item--menu"
+        class="mobile-tabbar__item mobile-tabbar__item--tab mobile-tabbar__item--menu {% if mobile_tab_active == 'menu' %}is-active{% endif %}"
         id="mobile-menu-toggle"
         data-menu-toggle
         type="button"
         aria-label="メニューを開く"
         aria-expanded="false"
         aria-controls="mobile-drawer"
+        aria-current="{% if mobile_tab_active == 'menu' %}page{% else %}false{% endif %}"
       >
-        メニュー
+        <span class="mobile-tabbar__icon" aria-hidden="true">
+          <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+            <path d="M4 7h16v2H4V7zm0 5h16v2H4v-2zm0 5h16v2H4v-2z" />
+          </svg>
+        </span>
+        <span class="mobile-tabbar__label">メニュー</span>
+        <span class="mobile-tabbar__dot" aria-hidden="true"></span>
       </button>
     </nav>
     <div class="mobile-tabbar-toast" id="mobile-tabbar-toast" aria-live="polite" aria-atomic="true" hidden></div>
@@ -181,16 +207,30 @@
           }, 2400);
         };
 
-        const setMobilePunchState = (state) => {
+        let currentPunchState = null;
+
+        const setMobilePunchState = (state, { emit = false } = {}) => {
           if (!mobilePunchForm || !mobilePunchBtn) return;
           const action = String(state?.primary_action || "clock-in");
           const endpoint = String(state?.primary_endpoint || "/events/clock-in");
           const label = String(state?.primary_label || (action === "clock-out" ? "退勤" : "出勤"));
           const disabled = Boolean(state?.primary_disabled || action === "done");
+          currentPunchState = {
+            primary_action: action,
+            primary_endpoint: endpoint,
+            primary_label: label,
+            primary_disabled: disabled,
+            status: String(state?.status || ""),
+            record: state?.record || {},
+          };
           mobilePunchForm.action = endpoint;
           mobilePunchForm.dataset.clockAction = action;
           mobilePunchBtn.textContent = label;
           mobilePunchBtn.disabled = disabled;
+          mobilePunchBtn.setAttribute("aria-disabled", disabled ? "true" : "false");
+          if (emit) {
+            window.dispatchEvent(new CustomEvent("cloudlog:punch-state", { detail: state }));
+          }
         };
 
         const refreshMobilePunchState = async () => {
@@ -200,10 +240,16 @@
             if (!res.ok) return;
             const payload = await res.json();
             if (!payload?.ok) return;
-            setMobilePunchState(payload || {});
+            setMobilePunchState(payload || {}, { emit: true });
           } catch (_err) {
             // no-op
           }
+        };
+
+        window.cloudlogPunch = {
+          applyState: (state) => setMobilePunchState(state || {}, { emit: false }),
+          refreshState: refreshMobilePunchState,
+          getState: () => currentPunchState,
         };
 
         if (mobilePunchForm && mobilePunchBtn) {
@@ -241,6 +287,11 @@
           });
           refreshMobilePunchState();
         }
+
+        window.addEventListener("cloudlog:punch-state", (event) => {
+          if (!event?.detail) return;
+          setMobilePunchState(event.detail, { emit: false });
+        });
 
         const openMenu = () => {
           if (!mobileMq.matches) return;
