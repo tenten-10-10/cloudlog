@@ -13,7 +13,8 @@
         pointer-events: none;
       }
 
-      .mobile-tabbar-toast {
+      .mobile-tabbar-toast,
+      .mobile-tabbar-toast[hidden] {
         display: none !important;
         visibility: hidden;
         pointer-events: none;
@@ -26,7 +27,7 @@
           pointer-events: auto;
         }
 
-        .mobile-tabbar-toast {
+        .mobile-tabbar-toast:not([hidden]) {
           display: block !important;
           visibility: visible;
           pointer-events: auto;
