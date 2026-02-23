@@ -6,6 +6,11 @@
 {% set secondary_mode = secondary_label or "外出" %}
 {% set secondary_action = secondary_action or "disabled" %}
 {% set secondary_endpoint = secondary_endpoint or "/events/outing" %}
+{% set progress_data = progress if progress is defined and progress else {'segments': [], 'now_pct': 0} %}
+{% set mom_pct = none %}
+{% if mom is mapping and 'percent_change' in mom %}
+{% set mom_pct = mom['percent_change'] %}
+{% endif %}
 
 <section class="panel today-shell">
   <div class="today-shell__head">
@@ -41,14 +46,14 @@
 
       <div class="day-progress" id="day-progress" aria-label="本日の進捗バー">
         <div class="day-progress__track">
-          {% for seg in progress.segments %}
+          {% for seg in progress_data.segments %}
           <span
             class="day-progress__segment day-progress__segment--{{ seg.kind }}"
             style="left: {{ seg.start_pct }}%; width: {{ seg.width_pct }}%;"
             title="{{ seg.start_label }}〜{{ seg.end_label }} ({{ seg.minutes }}分)"
           ></span>
           {% endfor %}
-          <span class="day-progress__marker" id="day-progress-marker" style="left: {{ progress.now_pct }}%;" aria-hidden="true"></span>
+          <span class="day-progress__marker" id="day-progress-marker" style="left: {{ progress_data.now_pct }}%;" aria-hidden="true"></span>
         </div>
         <div class="day-progress__legend">
           <span><i class="swatch swatch--work"></i>勤務</span>
@@ -127,8 +132,8 @@
       <h2>今期就業</h2>
       <p id="kpi-work">{{ minutes_to_hhmm(summary.work_minutes) }}</p>
       <p class="kpi-mom" id="kpi-work-mom">
-        {% if mom.percent_change is not none %}
-          <span class="{{ 'gain' if mom.percent_change >= 0 else 'loss' }}">前月比 {{ '+' if mom.percent_change > 0 else '' }}{{ mom.percent_change }}%</span>
+        {% if mom_pct is not none %}
+          <span class="{{ 'gain' if mom_pct >= 0 else 'loss' }}">前月比 {{ '+' if mom_pct > 0 else '' }}{{ mom_pct }}%</span>
         {% else %}
           <span class="muted">前月比 —</span>
         {% endif %}
