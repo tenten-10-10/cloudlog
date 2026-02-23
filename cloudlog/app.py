@@ -1072,6 +1072,34 @@ def leave_page(request: Request):
     )
 
 
+@app.get("/menu", response_class=HTMLResponse)
+def menu_page(request: Request):
+    user = _require_user(request)
+    items: list[dict[str, Any]] = [
+        {"title": "本日", "href": "/today", "description": "現在時刻と打刻を確認"},
+        {"title": "打刻履歴", "href": "/records", "description": "日次の勤怠履歴を確認"},
+        {"title": "休暇申請", "href": "/leave", "description": "有給や特別休暇を申請"},
+    ]
+    if user.get("role") == ROLE_ADMIN:
+        items.extend(
+            [
+                {"title": "集計・承認", "href": "/admin/summary", "description": "月次集計と承認キュー"},
+                {"title": "ユーザー管理", "href": "/admin/users", "description": "ユーザーの追加・権限設定"},
+                {"title": "管理設定", "href": "/admin/settings", "description": "締め日や勤怠ルール設定"},
+            ]
+        )
+    return _render(
+        request,
+        "menu.html",
+        {
+            "title": "メニュー",
+            "menu_items": items,
+            "flash_error": str(request.query_params.get("error") or ""),
+            "flash_message": str(request.query_params.get("msg") or ""),
+        },
+    )
+
+
 @app.post("/leave-requests")
 async def create_leave_request(request: Request):
     user = _require_user(request)

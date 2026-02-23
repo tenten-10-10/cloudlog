@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+{% block content %}
+<section class="panel menu-page">
+  <div class="menu-page__head">
+    <h1>メニュー</h1>
+    <p class="muted">利用したい機能を選択してください。</p>
+  </div>
+
+  {% if flash_error %}
+  <p class="alert alert--error">{{ flash_error }}</p>
+  {% endif %}
+  {% if flash_message %}
+  <p class="alert alert--ok">{{ flash_message }}</p>
+  {% endif %}
+
+  <div class="menu-page__grid">
+    {% for item in menu_items %}
+    <a class="menu-card" href="{{ item.href }}">
+      <div class="menu-card__title">{{ item.title }}</div>
+      <div class="menu-card__desc">{{ item.description }}</div>
+    </a>
+    {% endfor %}
+  </div>
+</section>
+{% endblock %}
