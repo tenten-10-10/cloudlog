@@ -61,28 +61,118 @@
 
         {% if current_user %}
         <nav class="nav nav--desktop" aria-label="メインナビゲーション">
-          <a class="nav__link {% if path == '/today' %}is-active{% endif %}" href="/today" aria-current="{% if path == '/today' %}page{% else %}false{% endif %}">本日</a>
-          <a class="nav__link {% if path.startswith('/records') %}is-active{% endif %}" href="/records" aria-current="{% if path.startswith('/records') %}page{% else %}false{% endif %}">打刻履歴</a>
-          <a class="nav__link {% if path.startswith('/leave') %}is-active{% endif %}" href="/leave" aria-current="{% if path.startswith('/leave') %}page{% else %}false{% endif %}">休暇申請</a>
+          <a class="nav__link {% if path == '/today' %}is-active{% endif %}" href="/today" aria-current="{% if path == '/today' %}page{% else %}false{% endif %}">
+            <span class="nav__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M12 3 2.5 10.2l1.2 1.6L5 10.9V20h5.8v-5.3h2.4V20H19v-9.1l1.3.9 1.2-1.6L12 3z" /></svg>
+            </span>
+            <span class="nav__label">本日</span>
+            <span class="nav__active-mark" aria-hidden="true"></span>
+          </a>
+          <a class="nav__link {% if path.startswith('/records') %}is-active{% endif %}" href="/records" aria-current="{% if path.startswith('/records') %}page{% else %}false{% endif %}">
+            <span class="nav__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M6 3h2v2h8V3h2v2h2a1 1 0 0 1 1 1v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1h2V3zm13 8H5v8h14v-8zM7 13h4v4H7v-4z" /></svg>
+            </span>
+            <span class="nav__label">打刻履歴</span>
+            <span class="nav__active-mark" aria-hidden="true"></span>
+          </a>
+          <a class="nav__link {% if path.startswith('/leave') %}is-active{% endif %}" href="/leave" aria-current="{% if path.startswith('/leave') %}page{% else %}false{% endif %}">
+            <span class="nav__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M19 4h-1V2h-2v2H8V2H6v2H5a2 2 0 0 0-2 2v13a3 3 0 0 0 3 3h10a5 5 0 0 0 5-5V6a2 2 0 0 0-2-2zm0 12a3 3 0 0 1-3 3H6a1 1 0 0 1-1-1V10h14v6z" /></svg>
+            </span>
+            <span class="nav__label">休暇申請</span>
+            <span class="nav__active-mark" aria-hidden="true"></span>
+          </a>
           {% if current_user.role == ROLE_ADMIN %}
-          <a class="nav__link {% if path.startswith('/admin/summary') %}is-active{% endif %}" href="/admin/summary" aria-current="{% if path.startswith('/admin/summary') %}page{% else %}false{% endif %}">集計・承認</a>
-          <a class="nav__link {% if path.startswith('/admin/users') %}is-active{% endif %}" href="/admin/users" aria-current="{% if path.startswith('/admin/users') %}page{% else %}false{% endif %}">ユーザー管理</a>
-          <a class="nav__link {% if path.startswith('/admin/settings') %}is-active{% endif %}" href="/admin/settings" aria-current="{% if path.startswith('/admin/settings') %}page{% else %}false{% endif %}">管理設定</a>
+          <a class="nav__link {% if path.startswith('/admin/summary') %}is-active{% endif %}" href="/admin/summary" aria-current="{% if path.startswith('/admin/summary') %}page{% else %}false{% endif %}">
+            <span class="nav__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M4 19h16v2H4v-2zm2-9h3v7H6v-7zm5-4h3v11h-3V6zm5 2h3v9h-3V8z" /></svg>
+            </span>
+            <span class="nav__label">集計・承認</span>
+            <span class="nav__active-mark" aria-hidden="true"></span>
+          </a>
+          <a class="nav__link {% if path.startswith('/admin/users') %}is-active{% endif %}" href="/admin/users" aria-current="{% if path.startswith('/admin/users') %}page{% else %}false{% endif %}">
+            <span class="nav__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M9 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm8 0a3 3 0 1 1 0-6 3 3 0 0 1 0 6zM3 20v-1c0-2.8 2.7-5 6-5s6 2.2 6 5v1H3zm13 0v-1c0-1.2-.3-2.3-.9-3.2 2.3.2 4.9 1.4 4.9 4.2v1h-4z" /></svg>
+            </span>
+            <span class="nav__label">ユーザー管理</span>
+            <span class="nav__active-mark" aria-hidden="true"></span>
+          </a>
+          <a class="nav__link {% if path.startswith('/admin/settings') %}is-active{% endif %}" href="/admin/settings" aria-current="{% if path.startswith('/admin/settings') %}page{% else %}false{% endif %}">
+            <span class="nav__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="m19.14 12.94.02-.94-.02-.94 2-1.55-1.9-3.29-2.35.66a7.2 7.2 0 0 0-1.63-.95L13.8 3h-3.6l-.46 2.88c-.58.23-1.12.54-1.63.9l-2.35-.66-1.9 3.3 2 1.54-.02.94.02.94-2 1.55 1.9 3.29 2.35-.66c.5.37 1.05.68 1.63.9l.46 2.92h3.6l.46-2.88c.58-.23 1.12-.54 1.63-.9l2.35.66 1.9-3.3-2-1.54zM12 15.5a3.5 3.5 0 1 1 0-7.01 3.5 3.5 0 0 1 0 7z" /></svg>
+            </span>
+            <span class="nav__label">管理設定</span>
+            <span class="nav__active-mark" aria-hidden="true"></span>
+          </a>
           {% else %}
-          <span class="nav__link is-disabled" aria-disabled="true">集計・承認</span>
-          <span class="nav__link is-disabled" aria-disabled="true">ユーザー管理</span>
-          <span class="nav__link is-disabled" aria-disabled="true">管理設定</span>
+          <span class="nav__link is-disabled" aria-disabled="true">
+            <span class="nav__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M4 19h16v2H4v-2zm2-9h3v7H6v-7zm5-4h3v11h-3V6zm5 2h3v9h-3V8z" /></svg>
+            </span>
+            <span class="nav__label">集計・承認</span>
+            <span class="nav__active-mark" aria-hidden="true"></span>
+          </span>
+          <span class="nav__link is-disabled" aria-disabled="true">
+            <span class="nav__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="M9 11a4 4 0 1 1 0-8 4 4 0 0 1 0 8zm8 0a3 3 0 1 1 0-6 3 3 0 0 1 0 6zM3 20v-1c0-2.8 2.7-5 6-5s6 2.2 6 5v1H3zm13 0v-1c0-1.2-.3-2.3-.9-3.2 2.3.2 4.9 1.4 4.9 4.2v1h-4z" /></svg>
+            </span>
+            <span class="nav__label">ユーザー管理</span>
+            <span class="nav__active-mark" aria-hidden="true"></span>
+          </span>
+          <span class="nav__link is-disabled" aria-disabled="true">
+            <span class="nav__icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true"><path d="m19.14 12.94.02-.94-.02-.94 2-1.55-1.9-3.29-2.35.66a7.2 7.2 0 0 0-1.63-.95L13.8 3h-3.6l-.46 2.88c-.58.23-1.12.54-1.63.9l-2.35-.66-1.9 3.3 2 1.54-.02.94.02.94-2 1.55 1.9 3.29 2.35-.66c.5.37 1.05.68 1.63.9l.46 2.92h3.6l.46-2.88c.58-.23 1.12-.54 1.63-.9l2.35.66 1.9-3.3-2-1.54zM12 15.5a3.5 3.5 0 1 1 0-7.01 3.5 3.5 0 0 1 0 7z" /></svg>
+            </span>
+            <span class="nav__label">管理設定</span>
+            <span class="nav__active-mark" aria-hidden="true"></span>
+          </span>
           {% endif %}
         </nav>
         {% endif %}
 
         <div class="user-tools">
           {% if current_user %}
+          <button class="desktop-menu-toggle" id="desktop-menu-toggle" type="button" aria-expanded="false" aria-controls="site-drawer" aria-label="メニューを開く">
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path d="M4 7h16v2H4V7zm0 5h16v2H4v-2zm0 5h16v2H4v-2z" />
+            </svg>
+            <span>メニュー</span>
+          </button>
           <span class="user-badge">{{ current_user.name }} / {{ current_user.role }}</span>
           {% endif %}
         </div>
       </div>
     </header>
+
+    {% if current_user %}
+    <div class="site-backdrop" id="site-backdrop" hidden></div>
+    <aside class="site-drawer" id="site-drawer" aria-hidden="true" hidden>
+      <div class="site-drawer__header">
+        <p>メニュー</p>
+        <button class="site-drawer__close" id="site-drawer-close" type="button" aria-label="メニューを閉じる">×</button>
+      </div>
+      <nav class="site-drawer__nav" aria-label="共通メニュー">
+        <a class="site-drawer__link {% if path == '/today' %}is-active{% endif %}" href="/today">本日</a>
+        <a class="site-drawer__link {% if path.startswith('/records') %}is-active{% endif %}" href="/records">打刻履歴</a>
+        <a class="site-drawer__link {% if path.startswith('/leave') %}is-active{% endif %}" href="/leave">休暇申請</a>
+        {% if current_user.role == ROLE_ADMIN %}
+        <a class="site-drawer__link {% if path.startswith('/admin/summary') %}is-active{% endif %}" href="/admin/summary">集計・承認</a>
+        <a class="site-drawer__link {% if path.startswith('/admin/users') %}is-active{% endif %}" href="/admin/users">ユーザー管理</a>
+        <a class="site-drawer__link {% if path.startswith('/admin/settings') %}is-active{% endif %}" href="/admin/settings">管理設定</a>
+        {% endif %}
+      </nav>
+      <div class="site-drawer__user">
+        <p>ユーザー</p>
+        <span class="user-badge">{{ current_user.name }} / {{ current_user.role }}</span>
+      </div>
+      <div class="site-drawer__footer">
+        <form method="post" action="/auth/logout" class="footer-inline-form">
+          <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
+          <button class="footer-link" type="submit">ログアウト</button>
+        </form>
+      </div>
+    </aside>
+    {% endif %}
 
     <main class="shell">
       {% block content %}{% endblock %}
@@ -175,6 +265,11 @@
         const mobilePunchForm = document.getElementById("mobile-punch-form");
         const mobilePunchBtn = document.getElementById("mobile-punch-btn");
         const mobileToast = document.getElementById("mobile-tabbar-toast");
+        const desktopMenuToggle = document.getElementById("desktop-menu-toggle");
+        const siteDrawer = document.getElementById("site-drawer");
+        const siteDrawerClose = document.getElementById("site-drawer-close");
+        const siteBackdrop = document.getElementById("site-backdrop");
+        const desktopMq = window.matchMedia("(min-width: 768px)");
 
         if (mobileToast) {
           mobileToast.hidden = true;
@@ -284,6 +379,57 @@
           if (!event?.detail) return;
           setMobilePunchState(event.detail, { emit: false });
         });
+
+        const hasSiteDrawer = Boolean(desktopMenuToggle && siteDrawer && siteDrawerClose && siteBackdrop);
+        const closeSiteDrawer = ({ immediate = false } = {}) => {
+          if (!hasSiteDrawer) return;
+          siteDrawer.classList.remove("is-open");
+          siteDrawer.setAttribute("aria-hidden", "true");
+          desktopMenuToggle.setAttribute("aria-expanded", "false");
+          siteBackdrop.hidden = true;
+          document.body.classList.remove("site-drawer-open");
+          if (immediate || !desktopMq.matches) {
+            siteDrawer.hidden = true;
+            return;
+          }
+          window.setTimeout(() => {
+            if (!siteDrawer.classList.contains("is-open")) siteDrawer.hidden = true;
+          }, 180);
+        };
+
+        const openSiteDrawer = () => {
+          if (!hasSiteDrawer || !desktopMq.matches) return;
+          siteDrawer.hidden = false;
+          requestAnimationFrame(() => {
+            siteDrawer.classList.add("is-open");
+          });
+          siteDrawer.setAttribute("aria-hidden", "false");
+          desktopMenuToggle.setAttribute("aria-expanded", "true");
+          siteBackdrop.hidden = false;
+          document.body.classList.add("site-drawer-open");
+        };
+
+        if (hasSiteDrawer) {
+          desktopMenuToggle.addEventListener("click", () => {
+            if (siteDrawer.classList.contains("is-open")) {
+              closeSiteDrawer();
+            } else {
+              openSiteDrawer();
+            }
+          });
+          siteDrawerClose.addEventListener("click", () => closeSiteDrawer());
+          siteBackdrop.addEventListener("click", () => closeSiteDrawer());
+          siteDrawer.querySelectorAll("a").forEach((link) => {
+            link.addEventListener("click", () => closeSiteDrawer({ immediate: true }));
+          });
+          document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") closeSiteDrawer();
+          });
+          desktopMq.addEventListener("change", (event) => {
+            if (!event.matches) closeSiteDrawer({ immediate: true });
+          });
+          closeSiteDrawer({ immediate: true });
+        }
 
       })();
     </script>

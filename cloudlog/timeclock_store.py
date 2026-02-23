@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import calendar
 import json
+import logging
 import os
 import tempfile
 import threading
@@ -593,10 +594,13 @@ class TimeclockStore:
             spreadsheet_id = _parse_sheet_id(DEFAULT_SPREADSHEET_URL)
         if not spreadsheet_id:
             return cls(MemoryTableGateway())
-
-        credentials_path = _resolve_google_credentials_path()
-        gateway = GoogleSheetsGateway(spreadsheet_id=spreadsheet_id, credentials_path=credentials_path)
-        return cls(gateway)
+        try:
+            credentials_path = _resolve_google_credentials_path()
+            gateway = GoogleSheetsGateway(spreadsheet_id=spreadsheet_id, credentials_path=credentials_path)
+            return cls(gateway)
+        except StorageError as exc:
+            logging.getLogger("cloudlog").warning("Google Sheets unavailable (%s). Falling back to memory backend.", exc)
+            return cls(MemoryTableGateway())
 
     def _init_defaults(self) -> None:
         with self._lock:
