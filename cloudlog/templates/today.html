@@ -24,9 +24,9 @@
   <div class="today-shell__grid">
     <article class="hero-card">
       <div class="hero-card__clock">
-        <p class="clock-caption">現在時刻</p>
+        <p class="clock-caption">本日 / JST</p>
+        <p class="clock-subtext clock-subtext--top" id="live-clock-date">----</p>
         <p class="live-clock live-clock--hero" id="live-clock" aria-live="polite">--:--:--</p>
-        <p class="clock-subtext" id="live-clock-date">----</p>
       </div>
 
       <form
@@ -83,7 +83,7 @@
 
       <details class="outing-log" id="outing-accordion">
         <summary class="outing-log__summary">
-          <span>外出 / 戻り</span>
+          <span>外出／戻り</span>
           <span class="accordion-chevron" aria-hidden="true"></span>
         </summary>
         <div class="outing-log__body">
@@ -417,7 +417,7 @@
       if (!secondaryForm || !secondaryButton) return;
       secondaryForm.action = String(state?.secondary_endpoint || "/events/outing");
       secondaryForm.dataset.clockAction = String(state?.secondary_action || "disabled");
-      secondaryButton.textContent = String(state?.secondary_label || "外出/戻り");
+      secondaryButton.textContent = String(state?.secondary_label || "外出／戻り");
       secondaryButton.disabled = Boolean(state?.secondary_disabled || state?.secondary_action === "disabled");
     };
 
@@ -702,6 +702,7 @@
     };
 
     document.querySelectorAll("form[data-clock-action]").forEach((form) => {
+      if (form.id === "mobile-punch-form") return;
       form.addEventListener("submit", (event) => {
         event.preventDefault();
         submitClock(form);

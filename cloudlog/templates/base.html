@@ -4,9 +4,11 @@
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1" />
     <title>{{ title or "SHOWA TIME CARD" }}</title>
-    <link rel="stylesheet" href="/static/style.css?v=20260222f" />
+    <link rel="stylesheet" href="/static/style.css?v=20260222g" />
     <style>
       /* Critical fallback: prevent mobile-only UI leakage on desktop */
+      .mobile-bottom-dock,
+      .mobile-punchbar,
       .mobile-tabbar {
         display: none !important;
         visibility: hidden;
@@ -21,6 +23,8 @@
       }
 
       @media (max-width: 767px) {
+        .mobile-bottom-dock,
+        .mobile-punchbar,
         .mobile-tabbar {
           display: grid !important;
           visibility: visible;
@@ -43,6 +47,8 @@
         {% set mobile_tab_active = 'records' %}
         {% elif path == '/today' %}
         {% set mobile_tab_active = 'today' %}
+        {% elif path.startswith('/leave') %}
+        {% set mobile_tab_active = 'leave' %}
         {% else %}
         {% set mobile_tab_active = 'menu' %}
         {% endif %}
@@ -115,58 +121,73 @@
     </main>
 
     {% if current_user %}
-    <nav class="mobile-tabbar" aria-label="モバイルナビゲーション">
-      <a
-        class="mobile-tabbar__item mobile-tabbar__item--tab {% if mobile_tab_active == 'records' %}is-active{% endif %}"
-        href="/records"
-        aria-current="{% if mobile_tab_active == 'records' %}page{% else %}false{% endif %}"
-      >
-        <span class="mobile-tabbar__icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-            <path d="M6 3h2v2h8V3h2v2h2a1 1 0 0 1 1 1v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1h2V3zm13 8H5v8h14v-8zM7 13h4v4H7v-4z" />
-          </svg>
-        </span>
-        <span class="mobile-tabbar__label">打刻履歴</span>
-        <span class="mobile-tabbar__dot" aria-hidden="true"></span>
-      </a>
-      <a
-        class="mobile-tabbar__item mobile-tabbar__item--tab {% if mobile_tab_active == 'today' %}is-active{% endif %}"
-        href="/today"
-        aria-current="{% if mobile_tab_active == 'today' %}page{% else %}false{% endif %}"
-      >
-        <span class="mobile-tabbar__icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-            <path d="M12 3 2.5 10.2l1.2 1.6L5 10.9V20h5.8v-5.3h2.4V20H19v-9.1l1.3.9 1.2-1.6L12 3z" />
-          </svg>
-        </span>
-        <span class="mobile-tabbar__label">本日</span>
-        <span class="mobile-tabbar__dot" aria-hidden="true"></span>
-      </a>
-      <form method="post" action="/events/clock-in" class="mobile-tabbar__action-form" id="mobile-punch-form" data-clock-action="clock-in">
+    <div class="mobile-bottom-dock" aria-label="モバイル操作バー">
+      <form method="post" action="/events/clock-in" class="mobile-punchbar" id="mobile-punch-form" data-clock-action="clock-in">
         <input type="hidden" name="csrf_token" value="{{ csrf_token }}" />
-        <button class="mobile-tabbar__item mobile-tabbar__item--primary mobile-tabbar__item--action" id="mobile-punch-btn" type="submit">
+        <button class="mobile-punchbar__button mobile-tabbar__item mobile-tabbar__item--primary mobile-tabbar__item--action" id="mobile-punch-btn" type="submit">
           出勤
         </button>
       </form>
-      <button
-        class="mobile-tabbar__item mobile-tabbar__item--tab mobile-tabbar__item--menu {% if mobile_tab_active == 'menu' %}is-active{% endif %}"
-        id="mobile-menu-toggle"
-        data-menu-toggle
-        type="button"
-        aria-label="メニューを開く"
-        aria-expanded="false"
-        aria-controls="mobile-drawer"
-        aria-current="{% if mobile_tab_active == 'menu' %}page{% else %}false{% endif %}"
-      >
-        <span class="mobile-tabbar__icon" aria-hidden="true">
-          <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
-            <path d="M4 7h16v2H4V7zm0 5h16v2H4v-2zm0 5h16v2H4v-2z" />
-          </svg>
-        </span>
-        <span class="mobile-tabbar__label">メニュー</span>
-        <span class="mobile-tabbar__dot" aria-hidden="true"></span>
-      </button>
-    </nav>
+      <nav class="mobile-tabbar" aria-label="モバイルナビゲーション">
+        <a
+          class="mobile-tabbar__item mobile-tabbar__item--tab {% if mobile_tab_active == 'today' %}is-active{% endif %}"
+          href="/today"
+          aria-current="{% if mobile_tab_active == 'today' %}page{% else %}false{% endif %}"
+        >
+          <span class="mobile-tabbar__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path d="M12 3 2.5 10.2l1.2 1.6L5 10.9V20h5.8v-5.3h2.4V20H19v-9.1l1.3.9 1.2-1.6L12 3z" />
+            </svg>
+          </span>
+          <span class="mobile-tabbar__label">本日</span>
+          <span class="mobile-tabbar__dot" aria-hidden="true"></span>
+        </a>
+        <a
+          class="mobile-tabbar__item mobile-tabbar__item--tab {% if mobile_tab_active == 'records' %}is-active{% endif %}"
+          href="/records"
+          aria-current="{% if mobile_tab_active == 'records' %}page{% else %}false{% endif %}"
+        >
+          <span class="mobile-tabbar__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path d="M6 3h2v2h8V3h2v2h2a1 1 0 0 1 1 1v13a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V6a1 1 0 0 1 1-1h2V3zm13 8H5v8h14v-8zM7 13h4v4H7v-4z" />
+            </svg>
+          </span>
+          <span class="mobile-tabbar__label">打刻履歴</span>
+          <span class="mobile-tabbar__dot" aria-hidden="true"></span>
+        </a>
+        <a
+          class="mobile-tabbar__item mobile-tabbar__item--tab {% if mobile_tab_active == 'leave' %}is-active{% endif %}"
+          href="/leave"
+          aria-current="{% if mobile_tab_active == 'leave' %}page{% else %}false{% endif %}"
+        >
+          <span class="mobile-tabbar__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path d="M19 4h-1V2h-2v2H8V2H6v2H5a2 2 0 0 0-2 2v13a3 3 0 0 0 3 3h10a5 5 0 0 0 5-5V6a2 2 0 0 0-2-2zm0 12a3 3 0 0 1-3 3H6a1 1 0 0 1-1-1V10h14v6z" />
+            </svg>
+          </span>
+          <span class="mobile-tabbar__label">休暇申請</span>
+          <span class="mobile-tabbar__dot" aria-hidden="true"></span>
+        </a>
+        <button
+          class="mobile-tabbar__item mobile-tabbar__item--tab mobile-tabbar__item--menu {% if mobile_tab_active == 'menu' %}is-active{% endif %}"
+          id="mobile-menu-toggle"
+          data-menu-toggle
+          type="button"
+          aria-label="メニューを開く"
+          aria-expanded="false"
+          aria-controls="mobile-drawer"
+          aria-current="{% if mobile_tab_active == 'menu' %}page{% else %}false{% endif %}"
+        >
+          <span class="mobile-tabbar__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+              <path d="M4 7h16v2H4V7zm0 5h16v2H4v-2zm0 5h16v2H4v-2z" />
+            </svg>
+          </span>
+          <span class="mobile-tabbar__label">メニュー</span>
+          <span class="mobile-tabbar__dot" aria-hidden="true"></span>
+        </button>
+      </nav>
+    </div>
     <div class="mobile-tabbar-toast" id="mobile-tabbar-toast" aria-live="polite" aria-atomic="true" hidden></div>
     {% endif %}
 
@@ -195,7 +216,7 @@
         const mobilePunchBtn = document.getElementById("mobile-punch-btn");
         const mobileToast = document.getElementById("mobile-tabbar-toast");
         const mobileMq = window.matchMedia("(max-width: 767px)");
-        if (!toggles.length || !drawer || !closeBtn || !backdrop) return;
+        const hasMenu = Boolean(toggles.length && drawer && closeBtn && backdrop);
 
         const showMobileToast = (message, kind = "ok") => {
           if (!mobileToast || !message) return;
@@ -295,6 +316,7 @@
         });
 
         const openMenu = () => {
+          if (!hasMenu) return;
           if (!mobileMq.matches) return;
           drawer.hidden = false;
           requestAnimationFrame(() => {
@@ -307,6 +329,7 @@
         };
 
         const closeMenu = ({ immediate = false } = {}) => {
+          if (!hasMenu) return;
           drawer.classList.remove("is-open");
           drawer.setAttribute("aria-hidden", "true");
           toggles.forEach((toggle) => toggle.setAttribute("aria-expanded", "false"));
@@ -321,27 +344,29 @@
           }, 180);
         };
 
-        toggles.forEach((toggle) => {
-          toggle.addEventListener("click", () => {
-            if (drawer.classList.contains("is-open")) {
-              closeMenu();
-            } else {
-              openMenu();
-            }
+        if (hasMenu) {
+          toggles.forEach((toggle) => {
+            toggle.addEventListener("click", () => {
+              if (drawer.classList.contains("is-open")) {
+                closeMenu();
+              } else {
+                openMenu();
+              }
+            });
           });
-        });
-        closeBtn.addEventListener("click", closeMenu);
-        backdrop.addEventListener("click", closeMenu);
-        drawer.querySelectorAll("a").forEach((link) => {
-          link.addEventListener("click", closeMenu);
-        });
-        document.addEventListener("keydown", (event) => {
-          if (event.key === "Escape") closeMenu();
-        });
-        mobileMq.addEventListener("change", (event) => {
-          if (!event.matches) closeMenu({ immediate: true });
-        });
-        closeMenu({ immediate: true });
+          closeBtn.addEventListener("click", closeMenu);
+          backdrop.addEventListener("click", closeMenu);
+          drawer.querySelectorAll("a").forEach((link) => {
+            link.addEventListener("click", closeMenu);
+          });
+          document.addEventListener("keydown", (event) => {
+            if (event.key === "Escape") closeMenu();
+          });
+          mobileMq.addEventListener("change", (event) => {
+            if (!event.matches) closeMenu({ immediate: true });
+          });
+          closeMenu({ immediate: true });
+        }
       })();
     </script>
   </body>
