@@ -575,6 +575,9 @@ async def attendance_clock_in(request: Request):
         if code == "already_clocked_out":
             return RedirectResponse(url="/attendance?error=本日は既に退勤済みです", status_code=303)
         return RedirectResponse(url="/attendance?error=出勤打刻に失敗しました", status_code=303)
+    except RuntimeError:
+        log.exception("clock_in failed due to backend runtime error")
+        return RedirectResponse(url="/attendance?error=出勤打刻に失敗しました", status_code=303)
 
     return RedirectResponse(url="/attendance?msg=出勤打刻しました", status_code=303)
 
@@ -597,6 +600,9 @@ async def attendance_clock_out(request: Request):
             return RedirectResponse(url="/attendance?error=出勤前に退勤打刻はできません", status_code=303)
         if code == "already_clocked_out":
             return RedirectResponse(url="/attendance?error=既に退勤打刻済みです", status_code=303)
+        return RedirectResponse(url="/attendance?error=退勤打刻に失敗しました", status_code=303)
+    except RuntimeError:
+        log.exception("clock_out failed due to backend runtime error")
         return RedirectResponse(url="/attendance?error=退勤打刻に失敗しました", status_code=303)
 
     return RedirectResponse(url="/attendance?msg=退勤打刻しました", status_code=303)
@@ -692,6 +698,8 @@ async def admin_attendance_update(request: Request, attendance_id: int):
             msg = "退勤時刻は出勤時刻より後に設定してください"
         elif code == "attendance_not_found":
             msg = "対象の打刻が見つかりません"
+        elif code == "not_supported":
+            msg = "この環境では管理者の打刻手動修正は未対応です"
         else:
             msg = "打刻修正に失敗しました"
         return RedirectResponse(url=f"/admin/attendance?{query_suffix}&error={quote(msg)}", status_code=303)

@@ -169,6 +169,39 @@ docker compose -f docker-compose.cloudlog-free.yml up -d --build
 docker compose -f docker-compose.cloudlog-free.yml down
 ```
 
+### Cloudlog 勤怠保存（Google Apps Script WebApp / GETのみ）
+
+Cloudlog の勤怠データ（出勤/退勤/直近履歴）は `cloudlog/db.py` から Google Apps Script WebApp を **GETのみ** で呼び出して保存します。
+`POST` は利用しません（302/HTML 応答回避のため）。
+
+`.env.cloudlog` へ以下を設定してください:
+
+```bash
+SHEETS_WEBAPP_URL=https://script.google.com/macros/s/AKfycby6yQ6G6lip3Y3o1cN-hf1R9MKagILwQt0i_CkFoYLitzBt96r4OBaBsTAgE6B59rI3/exec
+SHEETS_WEBAPP_KEY=showashokai
+SHEETS_WEBAPP_EVENTS_LIMIT=2000
+```
+
+動作確認（コンテナ内/ローカル共通）:
+
+```bash
+curl "$SHEETS_WEBAPP_URL"
+curl "$SHEETS_WEBAPP_URL?action=init&key=$SHEETS_WEBAPP_KEY"
+curl "$SHEETS_WEBAPP_URL?action=append_event&key=$SHEETS_WEBAPP_KEY&userId=u1&eventType=CLOCK_IN&timestamp=2026-02-24T09:00:00%2B09:00&note=&source=web"
+curl "$SHEETS_WEBAPP_URL?action=list_events&key=$SHEETS_WEBAPP_KEY&userId=u1&limit=10"
+```
+
+またはスモークスクリプト:
+
+```bash
+python3 scripts/smoke_sheets_webapp.py
+```
+
+期待値:
+- すべて HTTP 200
+- 応答が JSON (`{"ok": true, ...}`)
+HTML 応答が来た場合は Cloudlog 側で例外としてログ出力します。
+
 ## OCI本番デプロイ（Oracle Linux 9）
 
 `cloudlog-compose.service.example` は systemd 自動起動に使えます（任意）。

@@ -1,16 +1,22 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import sqlite3
 import time
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+
+import requests
 
 from sitewatcher.web.auth import hash_password
 
 SCHEMA_VERSION = 2
+JST = timezone(timedelta(hours=9))
+log = logging.getLogger("cloudlog.db")
 
 
 ROLE_ADMIN = "admin"
@@ -146,7 +152,28 @@ class CloudlogDB:
         self._conn.row_factory = sqlite3.Row
         self._conn.execute("PRAGMA foreign_keys=ON;")
         self._conn.execute("PRAGMA journal_mode=WAL;")
+        self._sheets_webapp_url = str(
+            os.getenv(
+                "SHEETS_WEBAPP_URL",
+                "https://script.google.com/macros/s/AKfycby6yQ6G6lip3Y3o1cN-hf1R9MKagILwQt0i_CkFoYLitzBt96r4OBaBsTAgE6B59rI3/exec",
+            )
+            or ""
+        ).strip()
+        self._sheets_webapp_key = str(os.getenv("SHEETS_WEBAPP_KEY", "showashokai") or "").strip()
+        raw_limit = str(os.getenv("SHEETS_WEBAPP_EVENTS_LIMIT", "2000") or "2000").strip()
+        try:
+            self._sheets_events_limit = max(10, int(raw_limit))
+        except ValueError:
+            self._sheets_events_limit = 2000
+        self._attendance_backend = "sheets_webapp" if self._sheets_webapp_url and self._sheets_webapp_key else "sqlite"
+        self._sheets_initialized = False
         self._init_schema()
+        if self._attendance_backend == "sheets_webapp":
+            try:
+                self._ensure_sheets_initialized()
+            except Exception:
+                # Attendance endpoints will surface the error later, but app startup should continue.
+                log.exception("Failed to initialize Sheets WebApp backend during startup")
 
     def close(self) -> None:
         self._conn.close()
@@ -895,6 +922,260 @@ class CloudlogDB:
             started_at=int(row["started_at"]),
         )
 
+    def _ensure_sheets_initialized(self) -> None:
+        if self._attendance_backend != "sheets_webapp":
+            return
+        if self._sheets_initialized:
+            return
+        self._webapp_get_json(action="init")
+        self._sheets_initialized = True
+
+    def _webapp_get_json(self, *, action: str, extra: dict[str, Any] | None = None) -> dict[str, Any]:
+        if not self._sheets_webapp_url or not self._sheets_webapp_key:
+            raise RuntimeError("sheets_webapp_not_configured")
+
+        query: dict[str, Any] = {"action": action, "key": self._sheets_webapp_key}
+        if extra:
+            for key, value in extra.items():
+                if value is None:
+                    continue
+                query[key] = value
+
+        try:
+            response = requests.get(self._sheets_webapp_url, params=query, timeout=12)
+        except Exception as exc:
+            log.exception("Sheets WebApp GET failed: action=%s", action)
+            raise RuntimeError("sheets_webapp_request_failed") from exc
+
+        if response.status_code != 200:
+            log.error("Sheets WebApp returned non-200: action=%s status=%s body=%s", action, response.status_code, response.text[:300])
+            raise RuntimeError("sheets_webapp_http_error")
+
+        body = str(response.text or "").strip()
+        content_type = str(response.headers.get("content-type", "")).lower()
+        if body.startswith("<") and "json" not in content_type:
+            log.error("Sheets WebApp returned HTML for action=%s: %s", action, body[:300])
+            raise RuntimeError("sheets_webapp_html_response")
+
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            log.error("Sheets WebApp returned non-JSON for action=%s: %s", action, body[:300])
+            raise RuntimeError("sheets_webapp_non_json_response") from exc
+
+        if not isinstance(payload, dict):
+            log.error("Sheets WebApp returned unexpected JSON for action=%s: %r", action, payload)
+            raise RuntimeError("sheets_webapp_invalid_payload")
+
+        if payload.get("ok") is False:
+            err = str(payload.get("error") or payload.get("message") or "sheets_webapp_error")
+            log.error("Sheets WebApp returned application error for action=%s: %s", action, err)
+            raise RuntimeError(err)
+
+        return payload
+
+    def _parse_event_timestamp(self, raw: Any) -> int:
+        if raw is None:
+            raise ValueError("missing_timestamp")
+        if isinstance(raw, (int, float)):
+            return int(raw)
+
+        text = str(raw).strip()
+        if not text:
+            raise ValueError("empty_timestamp")
+        if text.isdigit():
+            return int(text)
+
+        if text.endswith("Z"):
+            text = text[:-1] + "+00:00"
+        try:
+            dt = datetime.fromisoformat(text)
+        except ValueError:
+            dt = None
+            for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+                try:
+                    dt = datetime.strptime(text, fmt)
+                    break
+                except ValueError:
+                    continue
+            if dt is None:
+                raise
+
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=JST)
+        return int(dt.astimezone(JST).timestamp())
+
+    def _normalize_event(self, raw: dict[str, Any], *, fallback_user_id: int) -> dict[str, Any] | None:
+        if not isinstance(raw, dict):
+            return None
+        event_type = str(raw.get("eventType") or raw.get("event_type") or "").strip().upper()
+        if not event_type:
+            return None
+
+        try:
+            ts = self._parse_event_timestamp(
+                raw.get("timestamp")
+                or raw.get("eventTime")
+                or raw.get("event_at")
+                or raw.get("eventAt")
+                or raw.get("createdAt")
+            )
+        except Exception:
+            return None
+
+        user_id_raw = raw.get("userId")
+        if user_id_raw is None:
+            user_id_raw = raw.get("user_id")
+        try:
+            event_user_id = int(user_id_raw) if user_id_raw is not None else int(fallback_user_id)
+        except (TypeError, ValueError):
+            event_user_id = int(fallback_user_id)
+
+        note = str(raw.get("note") or "")
+        event_id = str(raw.get("eventId") or raw.get("event_id") or "")
+        source = str(raw.get("source") or "web")
+
+        return {
+            "event_id": event_id,
+            "user_id": event_user_id,
+            "event_type": event_type,
+            "timestamp": int(ts),
+            "note": note,
+            "source": source,
+        }
+
+    def _list_events_webapp(self, *, user_id: int, limit: int | None = None) -> list[dict[str, Any]]:
+        if self._attendance_backend != "sheets_webapp":
+            return []
+
+        self._ensure_sheets_initialized()
+        requested_limit = int(limit) if limit is not None else self._sheets_events_limit
+        requested_limit = max(1, requested_limit)
+        payload = self._webapp_get_json(
+            action="list_events",
+            extra={"userId": str(int(user_id)), "limit": str(requested_limit)},
+        )
+        events_raw = payload.get("events")
+        if not isinstance(events_raw, list):
+            return []
+
+        normalized: list[dict[str, Any]] = []
+        for raw in events_raw:
+            evt = self._normalize_event(raw, fallback_user_id=int(user_id))
+            if evt is not None:
+                normalized.append(evt)
+
+        normalized.sort(key=lambda item: (int(item["timestamp"]), str(item["event_id"])))
+        return normalized
+
+    def _attendance_row_id(self, *, user_id: int, work_date: str) -> int:
+        digits = "".join(ch for ch in str(work_date) if ch.isdigit())
+        if not digits:
+            digits = "0"
+        return int(f"{int(user_id)}{digits}")
+
+    def _attendance_rows_from_events(
+        self,
+        *,
+        user_id: int,
+        username: str,
+        events: list[dict[str, Any]],
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> list[AttendanceRow]:
+        buckets: dict[str, dict[str, Any]] = {}
+        for event in events:
+            ts = int(event["timestamp"])
+            work_date = datetime.fromtimestamp(ts, tz=JST).date().isoformat()
+            if from_date and work_date < from_date:
+                continue
+            if to_date and work_date > to_date:
+                continue
+
+            bucket = buckets.setdefault(
+                work_date,
+                {
+                    "clock_in_at": None,
+                    "clock_out_at": None,
+                    "note": "",
+                    "created_at": ts,
+                    "updated_at": ts,
+                },
+            )
+            bucket["created_at"] = min(int(bucket["created_at"]), ts)
+            bucket["updated_at"] = max(int(bucket["updated_at"]), ts)
+
+            event_type = str(event["event_type"])
+            if event_type == "CLOCK_IN":
+                prev = bucket["clock_in_at"]
+                bucket["clock_in_at"] = ts if prev is None else min(int(prev), ts)
+            elif event_type == "CLOCK_OUT":
+                prev = bucket["clock_out_at"]
+                bucket["clock_out_at"] = ts if prev is None else max(int(prev), ts)
+
+            note = str(event.get("note") or "").strip()
+            if note:
+                bucket["note"] = note
+
+        rows: list[AttendanceRow] = []
+        for work_date, bucket in buckets.items():
+            if bucket["clock_in_at"] is None and bucket["clock_out_at"] is None:
+                continue
+            rows.append(
+                AttendanceRow(
+                    id=self._attendance_row_id(user_id=int(user_id), work_date=work_date),
+                    user_id=int(user_id),
+                    username=username,
+                    work_date=work_date,
+                    clock_in_at=int(bucket["clock_in_at"]) if bucket["clock_in_at"] is not None else None,
+                    clock_out_at=int(bucket["clock_out_at"]) if bucket["clock_out_at"] is not None else None,
+                    note=str(bucket["note"] or ""),
+                    updated_by_user_id=None,
+                    updated_by_username=None,
+                    created_at=int(bucket["created_at"]),
+                    updated_at=int(bucket["updated_at"]),
+                )
+            )
+
+        rows.sort(key=lambda item: (item.work_date, item.id), reverse=True)
+        return rows
+
+    def _list_attendance_webapp(
+        self,
+        *,
+        user_id: int | None = None,
+        from_date: str | None = None,
+        to_date: str | None = None,
+    ) -> list[AttendanceRow]:
+        users: list[UserRow] = []
+        if user_id is None:
+            users = self.list_users(active_only=False)
+        else:
+            user = self.get_user(int(user_id))
+            if user is None:
+                return []
+            users = [user]
+
+        rows: list[AttendanceRow] = []
+        for user in users:
+            try:
+                events = self._list_events_webapp(user_id=user.id, limit=self._sheets_events_limit)
+            except Exception:
+                log.exception("Failed to fetch attendance events for user_id=%s", user.id)
+                continue
+            rows.extend(
+                self._attendance_rows_from_events(
+                    user_id=user.id,
+                    username=user.username,
+                    events=events,
+                    from_date=from_date,
+                    to_date=to_date,
+                )
+            )
+
+        rows.sort(key=lambda item: (-int(item.work_date.replace("-", "")), item.username.lower(), -int(item.id)))
+        return rows
+
     def _attendance_snapshot(self, row: AttendanceRow | sqlite3.Row | None) -> dict[str, Any]:
         if row is None:
             return {}
@@ -946,6 +1227,12 @@ class CloudlogDB:
         )
 
     def get_attendance(self, *, attendance_id: int) -> AttendanceRow | None:
+        if self._attendance_backend == "sheets_webapp":
+            for row in self._list_attendance_webapp(user_id=None):
+                if int(row.id) == int(attendance_id):
+                    return row
+            return None
+
         row = self._conn.execute(
             """
             SELECT a.*, u.username, uu.username AS updated_by_username
@@ -962,6 +1249,12 @@ class CloudlogDB:
         return self._to_attendance(row)
 
     def get_attendance_by_user_date(self, *, user_id: int, work_date: str) -> AttendanceRow | None:
+        if self._attendance_backend == "sheets_webapp":
+            rows = self._list_attendance_webapp(user_id=int(user_id), from_date=work_date, to_date=work_date)
+            if not rows:
+                return None
+            return rows[0]
+
         row = self._conn.execute(
             """
             SELECT a.*, u.username, uu.username AS updated_by_username
@@ -978,6 +1271,29 @@ class CloudlogDB:
         return self._to_attendance(row)
 
     def clock_in(self, *, user_id: int, work_date: str, at_ts: int) -> AttendanceRow:
+        if self._attendance_backend == "sheets_webapp":
+            today = self.get_attendance_by_user_date(user_id=int(user_id), work_date=work_date)
+            if today and today.clock_in_at is not None:
+                raise ValueError("already_clocked_in")
+            if today and today.clock_out_at is not None:
+                raise ValueError("already_clocked_out")
+
+            ts_iso = datetime.fromtimestamp(int(at_ts), tz=JST).isoformat(timespec="seconds")
+            self._webapp_get_json(
+                action="append_event",
+                extra={
+                    "userId": str(int(user_id)),
+                    "eventType": "CLOCK_IN",
+                    "timestamp": ts_iso,
+                    "note": "",
+                    "source": "web",
+                },
+            )
+            attendance = self.get_attendance_by_user_date(user_id=int(user_id), work_date=work_date)
+            if attendance is None:
+                raise RuntimeError("attendance_not_found_after_clock_in")
+            return attendance
+
         row = self._conn.execute(
             "SELECT * FROM attendance_logs WHERE user_id=? AND work_date=? LIMIT 1",
             (int(user_id), work_date),
@@ -1026,6 +1342,29 @@ class CloudlogDB:
         return attendance
 
     def clock_out(self, *, user_id: int, work_date: str, at_ts: int) -> AttendanceRow:
+        if self._attendance_backend == "sheets_webapp":
+            today = self.get_attendance_by_user_date(user_id=int(user_id), work_date=work_date)
+            if today is None or today.clock_in_at is None:
+                raise ValueError("clock_in_required")
+            if today.clock_out_at is not None:
+                raise ValueError("already_clocked_out")
+
+            ts_iso = datetime.fromtimestamp(int(at_ts), tz=JST).isoformat(timespec="seconds")
+            self._webapp_get_json(
+                action="append_event",
+                extra={
+                    "userId": str(int(user_id)),
+                    "eventType": "CLOCK_OUT",
+                    "timestamp": ts_iso,
+                    "note": "",
+                    "source": "web",
+                },
+            )
+            attendance = self.get_attendance_by_user_date(user_id=int(user_id), work_date=work_date)
+            if attendance is None:
+                raise RuntimeError("attendance_not_found_after_clock_out")
+            return attendance
+
         row = self._conn.execute(
             "SELECT * FROM attendance_logs WHERE user_id=? AND work_date=? LIMIT 1",
             (int(user_id), work_date),
@@ -1067,6 +1406,13 @@ class CloudlogDB:
         from_date: str | None = None,
         to_date: str | None = None,
     ) -> list[AttendanceRow]:
+        if self._attendance_backend == "sheets_webapp":
+            return self._list_attendance_webapp(
+                user_id=int(user_id) if user_id is not None else None,
+                from_date=from_date,
+                to_date=to_date,
+            )
+
         sql = """
             SELECT a.*, u.username, uu.username AS updated_by_username
             FROM attendance_logs a
@@ -1090,7 +1436,55 @@ class CloudlogDB:
         rows = self._conn.execute(sql, tuple(args)).fetchall()
         return [self._to_attendance(row) for row in rows]
 
+    def list_events(self, *, user_id: int, limit: int = 10) -> list[dict[str, Any]]:
+        if self._attendance_backend == "sheets_webapp":
+            events = self._list_events_webapp(user_id=int(user_id), limit=max(1, int(limit)))
+            events.sort(key=lambda item: (int(item["timestamp"]), str(item["event_id"])), reverse=True)
+            return events[: max(1, int(limit))]
+
+        rows = self.list_attendance(user_id=int(user_id))
+        events: list[dict[str, Any]] = []
+        for row in rows:
+            if row.clock_in_at is not None:
+                events.append(
+                    {
+                        "event_id": f"{row.id}:in",
+                        "user_id": row.user_id,
+                        "event_type": "CLOCK_IN",
+                        "timestamp": int(row.clock_in_at),
+                        "note": row.note,
+                        "source": "sqlite",
+                    }
+                )
+            if row.clock_out_at is not None:
+                events.append(
+                    {
+                        "event_id": f"{row.id}:out",
+                        "user_id": row.user_id,
+                        "event_type": "CLOCK_OUT",
+                        "timestamp": int(row.clock_out_at),
+                        "note": row.note,
+                        "source": "sqlite",
+                    }
+                )
+        events.sort(key=lambda item: int(item["timestamp"]), reverse=True)
+        return events[: max(1, int(limit))]
+
     def attendance_summary(self, *, user_id: int, from_date: str, to_date: str) -> dict[str, Any]:
+        if self._attendance_backend == "sheets_webapp":
+            rows = self._list_attendance_webapp(user_id=int(user_id), from_date=from_date, to_date=to_date)
+            total_seconds = 0
+            worked_days = 0
+            for row in rows:
+                if row.clock_in_at is not None:
+                    worked_days += 1
+                if row.clock_in_at is None or row.clock_out_at is None:
+                    continue
+                if int(row.clock_out_at) < int(row.clock_in_at):
+                    continue
+                total_seconds += int(row.clock_out_at) - int(row.clock_in_at)
+            return {"total_seconds": total_seconds, "worked_days": worked_days}
+
         row = self._conn.execute(
             """
             SELECT
@@ -1122,6 +1516,9 @@ class CloudlogDB:
         note: str,
         reason: str,
     ) -> AttendanceRow:
+        if self._attendance_backend == "sheets_webapp":
+            raise ValueError("not_supported")
+
         if not str(reason or "").strip():
             raise ValueError("reason_required")
         if clock_in_at is None and clock_out_at is not None:
