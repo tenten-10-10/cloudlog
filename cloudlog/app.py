@@ -1201,9 +1201,15 @@ async def update_user(request: Request, user_id: int):
 
     role = str(form.get("role", ROLE_MEMBER) or ROLE_MEMBER)
     hourly_cost = _parse_hours(str(form.get("hourly_cost", "0") or "0"))
-    if role in ROLE_ORDER:
-        DB.update_user_role_and_cost(user_id, role=role, hourly_cost=hourly_cost)
-    return RedirectResponse(url="/users", status_code=303)
+    if leave_type == LEAVE_COMPANY_DESIGNATED:
+        return _error_or_redirect(
+            request,
+            redirect_to="/leave",
+            message="会社指定有給はカレンダーではなく管理設定から調整してください",
+            code=400,
+        )
+
+    if leave_type not in {LEAVE_PAID, LEAVE_SPECIAL, LEAVE_OTHER}:
 
 
 @app.get("/reports", response_class=HTMLResponse)
